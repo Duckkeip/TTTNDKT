@@ -1,9 +1,8 @@
-Thành phần			Descriptor đề xuất
-Phát hiện thẻ SV		HOG
-Ảnh trên thẻ			LBP
-Phát hiện khuôn mặt		HOG
-Nhận dạng khuôn mặt		CNN embedding
-Phát hiện xe			CNN (YOLO)
-Biển số				HOG + OCR
 
-
+Thành phần	Phương pháp / Đặc trưng sử dụng
+Phát hiện thẻ sinh viên	CNN Object Detection (YOLO)
+Ảnh sinh viên trên thẻ	CNN Feature Extraction
+Phát hiện khuôn mặt	CNN Face Detection (MTCNN / RetinaFace)
+Nhận dạng khuôn mặt	CNN Embedding (FaceNet / ArcFace)
+Phát hiện xe	CNN Object Detection (YOLO)
+Biển số xe	CNN Detection + CNN OCR
