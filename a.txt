@@ -1,0 +1,7 @@
+Thành phần			Descriptor đề xuất
+Phát hiện thẻ SV		HOG
+Ảnh trên thẻ			LBP
+Phát hiện khuôn mặt		HOG
+Nhận dạng khuôn mặt		CNN embedding
+Phát hiện xe			CNN (YOLO)
+Biển số				HOG + OCR
