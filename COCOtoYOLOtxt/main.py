@@ -48,6 +48,6 @@ def convert_coco_to_yolo(json_path, output_dir):
 
 
 convert_coco_to_yolo(
-    'labels_thesvcobao_2025-12-31-10-57-21.json',
+    'labels_kobao_2026-01-01-09-28-41.json', # Đổi tên file COCO đây
     'labels'
 )
