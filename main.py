@@ -9,9 +9,9 @@ ocr = PaddleOCR(use_textline_orientation=True, lang='en')
 
 
 # Read image
-img = cv2.imread("test.jpg")
+img = cv2.imread("test.png")
 if img is None:
-    raise ValueError("Không đọc được ảnh test.jpg")
+    raise ValueError("Không đọc được ảnh test.png")
 
 # Detect biển số
 results = yolo_bienso(img)[0]
