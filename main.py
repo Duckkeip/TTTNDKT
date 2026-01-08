@@ -1,4 +1,3 @@
-
 import os
 import re
 import cv2
@@ -7,10 +6,10 @@ from ultralytics import YOLO
 from paddleocr import PaddleOCR
 from tkinter import Tk, filedialog
 
-# 1️⃣ Khởi tạo models
-yolo_bienso = YOLO("Bienso.pt")
-# Thử dùng lang='ch' để đọc số chuẩn hơn nếu 'en' vẫn lỗi
-ocr = PaddleOCR(lang='ch', use_textline_orientation=False)
+# 1. Khởi tạo
+yolo_model = YOLO("Bienso.pt")
+# Khởi tạo PaddleOCR với cấu hình ổn định
+ocr = PaddleOCR(use_angle_cls=True, lang='en')
 
 
 def select_file():
@@ -22,14 +21,11 @@ def select_file():
     return path
 
 
-# 2️⃣ Chọn ảnh
 image_path = select_file()
-if not image_path:
-    print("❌ Chưa chọn ảnh.");
-    exit()
+if not image_path: exit()
 
 img = cv2.imread(image_path)
-results = yolo_bienso(img)[0]
+results = yolo_model(img)[0]
 
 if len(results.boxes.xyxy) == 0:
     print("❌ YOLO không tìm thấy biển số.")
@@ -37,71 +33,64 @@ else:
     for idx, box in enumerate(results.boxes.xyxy):
         x1, y1, x2, y2 = map(int, box)
 
-        # Cắt ảnh từ YOLO
-        crop = img[y1:y2, x1:x2]
+        # Cắt biển số (nới rộng 2px để tránh mất nét)
+        crop = img[max(0, y1 - 2):min(img.shape[0], y2 + 2),
+        max(0, x1 - 2):min(img.shape[1], x2 + 2)]
         if crop.size == 0: continue
 
-        # --- BÍ KÍP 1: CẮT RÌA (MARGIN CROP) ---
-        # Loại bỏ 10% mỗi cạnh để xóa khung đen và lưới tản nhiệt dính vào
-        h_c, w_c = crop.shape[:2]
-        margin_h = int(h_c * 0.1)
-        margin_w = int(w_c * 0.05)
-        crop = crop[margin_h:h_c - margin_h, margin_w:w_c - margin_w]
+        # --- TIỀN XỬ LÝ ---
+        h, w = crop.shape[:2]
+        crop = cv2.resize(crop, (w * 3, h * 3), interpolation=cv2.INTER_LANCZOS4)
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
 
-        # --- BÍ KÍP 2: TIỀN XỬ LÝ NHIỄU ---
-        # Phóng to ảnh
-        crop_res = cv2.resize(crop, None, fx=3, fy=3, interpolation=cv2.INTER_LANCZOS4)
-        gray = cv2.cvtColor(crop_res, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray = clahe.apply(gray)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        ocr_input = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
-        # Khử nhiễu làm mịn nền
-        gray = cv2.fastNlMeansDenoising(gray, h=10)
-
-        # Tăng tương phản (Chỉnh clipLimit từ 10.0 - 40.0 là tối đa)
-        clahe = cv2.createCLAHE(clipLimit=20.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray)
-
-        # Nhị phân hóa Otsu để lấy chữ đen trên nền trắng tinh
-        _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        # Làm dày nét chữ một chút để AI dễ đọc (Morphology)
-        kernel = np.ones((2, 2), np.uint8)
-        binary = cv2.erode(binary, kernel, iterations=1)
-
-        # Chuyển về 3 kênh cho AI
-        ocr_input = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
-
-        # HIỂN THỊ ẢNH DEBUG
-        cv2.imshow(f"AI Vision - Da loc nhieu {idx + 1}", ocr_input)
-
-        # 3️⃣ OCR NHẬN DIỆN
-        prediction = ocr.predict(ocr_input)
-        ocr_rs = list(prediction)
+        # --- NHẬN DIỆN (SỬA LỖI TẠI ĐÂY) ---
+        # Sử dụng ocr.ocr() nhưng truy xuất theo cấu trúc an toàn
+        output = ocr.ocr(ocr_input)
 
         plate_text = ""
-        if ocr_rs and ocr_rs[0]:
-            raw_text = "".join([line[1][0] for line in ocr_rs[0]])
+        if output and output[0]:
+            for line in output[0]:
+                # Kiểm tra chắc chắn line có cấu trúc: [ [box], (text, confidence) ]
+                if isinstance(line, list) and len(line) > 1:
+                    data = line[1]  # Lấy phần (text, confidence)
+                    if isinstance(data, tuple) and len(data) > 1:
+                        text = data[0]
+                        conf = data[1]
 
-            # Làm sạch bằng Regex
-            plate_text = re.sub(r'[^0-9A-Z]', '', raw_text.upper())
+                        if conf > 0.4:
+                            print(f"--- AI thấy: {text} ({round(conf, 2)})")
+                            plate_text += text
 
-            # Loại bỏ các từ "ma" thường gặp
-            for noise in ["NAO", "TO", "EEEE", "IEE", "NONE"]:
-                plate_text = plate_text.replace(noise, "")
+            # Làm sạch kết quả
+            plate_text = re.sub(r'[^0-9A-Z]', '', plate_text.upper())
+            # Sửa lỗi nhận diện nhầm ký tự thường gặp
+            mapping = {'S': '5', 'G': '6', 'O': '0', 'D': '0'}
+            for char, replace_char in mapping.items():
+                # Chỉ thay thế ở những vị trí hợp lý (ví dụ đầu biển thường là số)
+                if plate_text.startswith(char):
+                    plate_text = replace_char + plate_text[1:]
 
-            # Biển số VN thường dài 7-9 ký tự, cắt bỏ nếu quá dài
-            plate_text = plate_text[:10]
+            print(f"✅ KẾT QUẢ CUỐI: {plate_text}")
 
-            print(f"✅ Biển số: {plate_text} (Gốc: {raw_text})")
-
-            # Vẽ lên ảnh gốc
+            # Vẽ lên ảnh
             cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(img, plate_text, (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
 
-# 4️⃣ Hiển thị kết quả
-cv2.imshow("Final Result", img)
+cv2.imshow("Result", img)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
+
+
+
+
+
+
 '''
 
 import os
