@@ -6,3 +6,4 @@ Phát hiện khuôn mặt	CNN Face Detection (MTCNN / RetinaFace)
 Nhận dạng khuôn mặt	CNN Embedding (FaceNet / ArcFace)
 Phát hiện xe	CNN Object Detection (YOLO)
 Biển số xe	CNN Detection + CNN OCR
+aa

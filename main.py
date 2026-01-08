@@ -3,13 +3,12 @@ import re
 import cv2
 import numpy as np
 from ultralytics import YOLO
-from paddleocr import PaddleOCR
+import easyocr
 from tkinter import Tk, filedialog
 
-# 1. Khởi tạo
+# 1. Khởi tạo Models
 yolo_model = YOLO("Bienso.pt")
-# Khởi tạo PaddleOCR với cấu hình ổn định
-ocr = PaddleOCR(use_angle_cls=True, lang='en')
+reader = easyocr.Reader(['en'], gpu=False)
 
 
 def select_file():
@@ -21,74 +20,97 @@ def select_file():
     return path
 
 
+def vietnamese_plate_correction(text):
+    """Hàm sửa lỗi dựa trên logic định dạng biển số VN"""
+    text = re.sub(r'[^0-9A-Z]', '', text.upper())
+    if len(text) < 7: return text
+
+    chars = list(text)
+    # Quy tắc: Ký tự thứ 3 (index 2) thường là CHỮ (K, L, M, N...)
+    map_to_char = {'1': 'I', '7': 'T', '0': 'O', '5': 'S', '2': 'Z'}
+    if chars[2].isdigit():
+        chars[2] = map_to_char.get(chars[2], chars[2])
+
+    # Quy tắc: Ký tự thứ 4 (index 3) thường là SỐ
+    map_to_num = {'I': '1', 'T': '7', 'S': '5', 'G': '6', 'B': '8', 'D': '0'}
+    if not chars[3].isdigit():
+        chars[3] = map_to_num.get(chars[3], chars[3])
+
+    return "".join(chars)
+
+
 image_path = select_file()
 if not image_path: exit()
 
 img = cv2.imread(image_path)
-results = yolo_model(img)[0]
+results = yolo_model.predict(img, conf=0.5)[0]
 
-if len(results.boxes.xyxy) == 0:
+if len(results.boxes) == 0:
     print("❌ YOLO không tìm thấy biển số.")
 else:
     for idx, box in enumerate(results.boxes.xyxy):
         x1, y1, x2, y2 = map(int, box)
 
-        # Cắt biển số (nới rộng 2px để tránh mất nét)
-        crop = img[max(0, y1 - 2):min(img.shape[0], y2 + 2),
-        max(0, x1 - 2):min(img.shape[1], x2 + 2)]
+        # 1. Padding nới rộng vùng cắt
+        pad_h = int((y2 - y1) * 0.15)
+        pad_w = int((x2 - x1) * 0.10)
+        crop = img[max(0, y1 - pad_h):min(img.shape[0], y2 + pad_h),
+        max(0, x1 - pad_w):min(img.shape[1], x2 + pad_w)]
         if crop.size == 0: continue
 
-        # --- TIỀN XỬ LÝ ---
-        h, w = crop.shape[:2]
-        crop = cv2.resize(crop, (w * 3, h * 3), interpolation=cv2.INTER_LANCZOS4)
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        # 2. Tiền xử lý nâng cao
+        crop_res = cv2.resize(crop, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_LANCZOS4)
+        gray = cv2.cvtColor(crop_res, cv2.COLOR_BGR2GRAY)
 
+        # Cân bằng sáng
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        gray = clahe.apply(gray)
-        gray = cv2.GaussianBlur(gray, (3, 3), 0)
-        ocr_input = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        enhanced = clahe.apply(gray)
 
-        # --- NHẬN DIỆN (SỬA LỖI TẠI ĐÂY) ---
-        # Sử dụng ocr.ocr() nhưng truy xuất theo cấu trúc an toàn
-        output = ocr.ocr(ocr_input)
+        # --- BƯỚC QUAN TRỌNG: LÀM NÉT CẠNH (Giúp phân biệt 7/1) ---
+        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+        sharpened = cv2.filter2D(enhanced, -1, kernel)
 
-        plate_text = ""
-        if output and output[0]:
-            for line in output[0]:
-                # Kiểm tra chắc chắn line có cấu trúc: [ [box], (text, confidence) ]
-                if isinstance(line, list) and len(line) > 1:
-                    data = line[1]  # Lấy phần (text, confidence)
-                    if isinstance(data, tuple) and len(data) > 1:
-                        text = data[0]
-                        conf = data[1]
+        cv2.imshow(f"AI nhin thay {idx}", sharpened)
 
-                        if conf > 0.4:
-                            print(f"--- AI thấy: {text} ({round(conf, 2)})")
-                            plate_text += text
+        # 3. Nhận diện
+        ocr_results = reader.readtext(sharpened, detail=1)
 
-            # Làm sạch kết quả
-            plate_text = re.sub(r'[^0-9A-Z]', '', plate_text.upper())
-            # Sửa lỗi nhận diện nhầm ký tự thường gặp
-            mapping = {'S': '5', 'G': '6', 'O': '0', 'D': '0'}
-            for char, replace_char in mapping.items():
-                # Chỉ thay thế ở những vị trí hợp lý (ví dụ đầu biển thường là số)
-                if plate_text.startswith(char):
-                    plate_text = replace_char + plate_text[1:]
+        # Sắp xếp theo tọa độ X trước (từ trái sang phải)
+        # sau đó mới theo tọa độ Y (từ trên xuống dưới)
+        ocr_results.sort(key=lambda x: (x[0][0][1] // 10, x[0][0][0]))
 
-            print(f"✅ KẾT QUẢ CUỐI: {plate_text}")
+        plate_parts = []
+        for (bbox, text, prob) in ocr_results:
+            if prob > 0.2:
+                # Chỉ lấy chữ và số, bỏ dấu gạch, dấu chấm
+                clean_part = re.sub(r'[^0-9A-Z]', '', text.upper())
+                plate_parts.append(clean_part)
 
-            # Vẽ lên ảnh
-            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(img, plate_text, (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+        raw_plate = "".join(plate_parts)
 
-cv2.imshow("Result", img)
+        # 4. Hậu xử lý thông minh (Fix lỗi 1/7, 5/6 nhưng không làm mất chuỗi)
+        final_text = raw_plate
+        if len(final_text) >= 7:
+            chars = list(final_text)
+            # Fix lỗi số 1 và 7 phổ biến
+            map_to_num = {'I': '1', 'T': '7', 'S': '5', 'G': '6', 'B': '8', 'D': '0'}
+            # Thử fix các vị trí chắc chắn là số (thường là các vị trí cuối)
+            for i in range(len(chars) - 1, len(chars) - 4, -1):
+                if not chars[i].isdigit():
+                    chars[i] = map_to_num.get(chars[i], chars[i])
+            final_text = "".join(chars)
+
+        print(f"✅ KẾT QUẢ CUỐI: {final_text}")
+
+        # --- VẼ LÊN ẢNH ---
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.rectangle(img, (x1, y1 - 35), (x1 + 250, y1), (0, 255, 0), -1)
+        cv2.putText(img, final_text, (x1 + 5, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 2)
+
+cv2.imshow("Anh dau vao", img)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
-
-
-
-
 
 
 '''
