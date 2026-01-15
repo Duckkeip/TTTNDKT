@@ -5,110 +5,320 @@ import numpy as np
 from ultralytics import YOLO
 import easyocr
 from tkinter import Tk, filedialog
+from datetime import datetime
+import unicodedata
+# =========================
+# QUALITY CHECK & ENHANCE
+# =========================
 
-# 1. Khởi tạo Models
-yolo_model = YOLO("Bienso.pt")
-reader = easyocr.Reader(['en'], gpu=False)
+def is_blurry(image, thresh=80):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    fm = cv2.Laplacian(gray, cv2.CV_64F).var()
+    return fm < thresh, fm
+
+def is_dark(image, thresh=60):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    mean = np.mean(gray)
+    return mean < thresh, mean
+
+def remove_shadow(img):
+    rgb_planes = cv2.split(img)
+    result_planes = []
+
+    for plane in rgb_planes:
+        dilated = cv2.dilate(plane, np.ones((7,7), np.uint8))
+        bg = cv2.medianBlur(dilated, 21)
+        diff = 255 - cv2.absdiff(plane, bg)
+        result_planes.append(diff)
+
+    result = cv2.merge(result_planes)
+    return cv2.normalize(result, None, 0, 255, cv2.NORM_MINMAX)
+
+def enhance_image(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(3.0, (8,8))
+    cl1 = clahe.apply(gray)
+    kernel = np.array([[0,-1,0],[-1,5,-1],[0,-1,0]])
+    sharp = cv2.filter2D(cl1, -1, kernel)
+    return sharp
 
 
+# =========================
+# 1. KHỞI TẠO MODEL
+# =========================
+yolo_plate = YOLO("Bienso.pt")
+yolo_sv    = YOLO("Thesv.pt")
+reader = easyocr.Reader(['vi','en'], gpu=False)
+
+# =========================
+# 2. CHỌN ẢNH
+# =========================
 def select_file():
     root = Tk()
     root.withdraw()
     root.attributes('-topmost', True)
-    path = filedialog.askopenfilename(title="Chọn ảnh biển số xe")
+    path = filedialog.askopenfilename(title="Chọn ảnh")
     root.destroy()
     return path
 
-
+# =========================
+# 3. SỬA LỖI BIỂN SỐ
+# =========================
 def vietnamese_plate_correction(text):
-    """Hàm sửa lỗi dựa trên logic định dạng biển số VN"""
     text = re.sub(r'[^0-9A-Z]', '', text.upper())
-    if len(text) < 7: return text
+    if len(text) < 7:
+        return text
 
     chars = list(text)
-    # Quy tắc: Ký tự thứ 3 (index 2) thường là CHỮ (K, L, M, N...)
+
     map_to_char = {'1': 'I', '7': 'T', '0': 'O', '5': 'S', '2': 'Z'}
-    if chars[2].isdigit():
+    map_to_num  = {'I': '1', 'T': '7', 'S': '5', 'G': '6', 'B': '8', 'D': '0', 'O':'0'}
+
+    if len(chars) > 2 and chars[2].isdigit():
         chars[2] = map_to_char.get(chars[2], chars[2])
 
-    # Quy tắc: Ký tự thứ 4 (index 3) thường là SỐ
-    map_to_num = {'I': '1', 'T': '7', 'S': '5', 'G': '6', 'B': '8', 'D': '0'}
-    if not chars[3].isdigit():
+    if len(chars) > 3 and not chars[3].isdigit():
         chars[3] = map_to_num.get(chars[3], chars[3])
+
+    for i in range(len(chars)-1, max(len(chars)-4, 3), -1):
+        if not chars[i].isdigit():
+            chars[i] = map_to_num.get(chars[i], chars[i])
 
     return "".join(chars)
 
-
+# =========================
+# 4. MAIN
+# =========================
 image_path = select_file()
-if not image_path: exit()
+if not image_path:
+    print("❌ Chưa chọn ảnh")
+    exit()
 
 img = cv2.imread(image_path)
-results = yolo_model.predict(img, conf=0.5)[0]
 
-if len(results.boxes) == 0:
-    print("❌ YOLO không tìm thấy biển số.")
-else:
-    for idx, box in enumerate(results.boxes.xyxy):
-        x1, y1, x2, y2 = map(int, box)
+plate_results = yolo_plate.predict(img, conf=0.5)[0]
+sv_results    = yolo_sv.predict(img, conf=0.5)[0]
+if len(sv_results.boxes) == 0:
+    print("⚠ KHÔNG PHÁT HIỆN THẺ SINH VIÊN HOẶC KHUÔN MẶT")
 
-        # 1. Padding nới rộng vùng cắt
-        pad_h = int((y2 - y1) * 0.15)
-        pad_w = int((x2 - x1) * 0.10)
-        crop = img[max(0, y1 - pad_h):min(img.shape[0], y2 + pad_h),
-        max(0, x1 - pad_w):min(img.shape[1], x2 + pad_w)]
-        if crop.size == 0: continue
+if len(plate_results.boxes) == 0:
+    print("⚠ KHÔNG PHÁT HIỆN BIỂN SỐ")
+os.makedirs("plates", exist_ok=True)
+os.makedirs("sv_cards", exist_ok=True)
 
-        # 2. Tiền xử lý nâng cao
-        crop_res = cv2.resize(crop, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_LANCZOS4)
-        gray = cv2.cvtColor(crop_res, cv2.COLOR_BGR2GRAY)
+def normalize_text(text):
+    text = unicodedata.normalize('NFD', text)
+    text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
+    text = text.upper()
+    text = re.sub(r"[^A-Z0-9/ ]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+def extract_student_info(ocr_text):
+    data = {
+        "school": "",
+        "name": "",
+        "student_id": "",
+        "major": "",
+        "year": "",
+        "dob": "",  # ✅ ngày sinh
+        "dates": []
+    }
 
-        # Cân bằng sáng
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray)
+    text = normalize_text(ocr_text)
+    # 🎂 DATE OF BIRTH / NGÀY SINH (ưu tiên có nhãn)
+    dob_match = re.search(
+        r"(NGAY SINH|DOB|DATE OF BIRTH)\s*[: ]*\s*(\d{1,2}/\d{1,2}/\d{2,4})",
+        text
+    )
 
-        # --- BƯỚC QUAN TRỌNG: LÀM NÉT CẠNH (Giúp phân biệt 7/1) ---
-        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
-        sharpened = cv2.filter2D(enhanced, -1, kernel)
+    if dob_match:
+        data["dob"] = dob_match.group(2)
+    else:
+        # fallback: lấy ngày dạng dd/mm/yyyy
+        full_dates = re.findall(r"\b\d{1,2}/\d{1,2}/\d{4}\b", text)
+        if full_dates:
+            data["dob"] = full_dates[0]
 
-        cv2.imshow(f"AI nhin thay {idx}", sharpened)
+    # 🎓 Trường
+    if "HOC VIEN HANG KHONG" in text or "HỌC VIỆN HÀNG KHÔNG" in text:
+        data["school"] = "HỌC VIỆN HÀNG KHÔNG VIỆT NAM"
 
-        # 3. Nhận diện
-        ocr_results = reader.readtext(sharpened, detail=1)
+    # 🆔 MSSV (>=8 số)
+    ids = re.findall(r"\b\d{8,11}\b", text)
+    if ids:
+        data["student_id"] = ids[0]
 
-        # Sắp xếp theo tọa độ X trước (từ trái sang phải)
-        # sau đó mới theo tọa độ Y (từ trên xuống dưới)
-        ocr_results.sort(key=lambda x: (x[0][0][1] // 10, x[0][0][0]))
+    # 📅 Năm
+    years = re.findall(r"\b20\d{2}\b", text)
+    if years:
+        data["year"] = years[0]
 
-        plate_parts = []
-        for (bbox, text, prob) in ocr_results:
-            if prob > 0.2:
-                # Chỉ lấy chữ và số, bỏ dấu gạch, dấu chấm
-                clean_part = re.sub(r'[^0-9A-Z]', '', text.upper())
-                plate_parts.append(clean_part)
+    # 📆 Ngày
+    data["dates"] = re.findall(r"\b\d{1,2}/\d{1,2}\b", text)
 
-        raw_plate = "".join(plate_parts)
+    # 📚 NGÀNH (bắt theo từ khóa)
+    if ("CONG" in text and "NGHE" in text and "THONG" in text) or \
+       ("NGHE" in text and "TIN" in text):
+        data["major"] = "CÔNG NGHỆ THÔNG TIN"
+    elif "HANG KHONG" in text:
+        data["major"] = "HÀNG KHÔNG"
 
-        # 4. Hậu xử lý thông minh (Fix lỗi 1/7, 5/6 nhưng không làm mất chuỗi)
-        final_text = raw_plate
-        if len(final_text) >= 7:
-            chars = list(final_text)
-            # Fix lỗi số 1 và 7 phổ biến
-            map_to_num = {'I': '1', 'T': '7', 'S': '5', 'G': '6', 'B': '8', 'D': '0'}
-            # Thử fix các vị trí chắc chắn là số (thường là các vị trí cuối)
-            for i in range(len(chars) - 1, len(chars) - 4, -1):
-                if not chars[i].isdigit():
-                    chars[i] = map_to_num.get(chars[i], chars[i])
-            final_text = "".join(chars)
+    # 👤 HỌ TÊN (chịu lỗi OCR)
+    name_patterns = [
+        r"HO.?V.?TEN[:\s]+([A-Z\s]+)",
+        r"HO.?VA.?TEN[:\s]+([A-Z\s]+)",
+        r"HOVATEN[:\s]+([A-Z\s]+)"
+    ]
 
-        print(f"✅ KẾT QUẢ CUỐI: {final_text}")
+    for p in name_patterns:
+        m = re.search(p, text)
+        if m:
+            name = m.group(1)
+            name = re.sub(r"(MSSV|MA SV|NGANH|KHOA|SINH VIEN|THE).*", "", name)
+            name = re.sub(r"\s+", " ", name).strip()
+            data["name"] = name.title()
+            break
 
-        # --- VẼ LÊN ẢNH ---
-        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.rectangle(img, (x1, y1 - 35), (x1 + 250, y1), (0, 255, 0), -1)
-        cv2.putText(img, final_text, (x1 + 5, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 2)
+    return data
 
-cv2.imshow("Anh dau vao", img)
+# =========================
+# 5. NHẬN DIỆN BIỂN SỐ
+# =========================
+print("\n🚗 ===== NHẬN DIỆN BIỂN SỐ =====")
+
+for idx, box in enumerate(plate_results.boxes):
+
+    x1, y1, x2, y2 = map(int, box.xyxy[0])
+    yolo_conf = float(box.conf[0])
+
+    pad_h = int((y2 - y1) * 0.15)
+    pad_w = int((x2 - x1) * 0.10)
+
+    crop = img[max(0, y1-pad_h):min(img.shape[0], y2+pad_h),
+               max(0, x1-pad_w):min(img.shape[1], x2+pad_w)]
+
+    if crop.size == 0:
+        continue
+
+    crop = cv2.resize(crop, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_LANCZOS4)
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+
+    clahe = cv2.createCLAHE(2.0, (8,8))
+    enhanced = clahe.apply(gray)
+
+    kernel = np.array([[0,-1,0],[-1,5,-1],[0,-1,0]])
+    sharpened = cv2.filter2D(enhanced, -1, kernel)
+
+    cv2.imwrite(f"plates/plate_{idx}.jpg", sharpened)
+
+    ocr_results = reader.readtext(sharpened, detail=1)
+    ocr_results.sort(key=lambda x: (x[0][0][1]//10, x[0][0][0]))
+
+    plate_parts = []
+    conf_list = []
+
+    for (bbox, text, prob) in ocr_results:
+        if prob > 0.2:
+            clean = re.sub(r'[^0-9A-Z]', '', text.upper())
+            if clean:
+                plate_parts.append(clean)
+                conf_list.append(prob)
+
+    raw_plate = "".join(plate_parts)
+    ocr_conf = np.mean(conf_list) if conf_list else 0
+
+    fixed_plate = vietnamese_plate_correction(raw_plate)
+    final_conf = round((yolo_conf*0.5 + ocr_conf*0.5)*100, 2)
+
+    is_valid = bool(re.match(r'^\d{2}[A-Z]\d{4,5}$', fixed_plate))
+
+    if final_conf < 35 or len(fixed_plate) < 7:
+        continue
+
+    print("────────────────────────")
+    print(f"📌 Plate : {fixed_plate}")
+    print(f"🎯 FINAL : {final_conf}%")
+    print(f"🇻🇳 Check: {'HỢP LỆ' if is_valid else 'NGHI NGỜ'}")
+
+    cv2.rectangle(img, (x1,y1), (x2,y2), (0,255,0), 2)
+    cv2.rectangle(img, (x1, y1-40), (x1+380, y1), (0,255,0), -1)
+    cv2.putText(img, f"{fixed_plate} | {final_conf}%", (x1+5, y1-12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,0), 2)
+
+# =========================
+# 6. NHẬN DIỆN THẺ SINH VIÊN
+# =========================
+print("\n🎓 ===== NHẬN DIỆN THẺ SINH VIÊN =====")
+
+names = yolo_sv.names  # {0:'the', 1:'mat'}
+
+for idx, box in enumerate(sv_results.boxes):
+
+    x1, y1, x2, y2 = map(int, box.xyxy[0])
+    conf = float(box.conf[0])
+    cls_id = int(box.cls[0])
+    cls_name = names[cls_id]
+
+    crop = img[y1:y2, x1:x2]
+    if crop.size == 0:
+        continue
+
+    # ================= FACE =================
+    if cls_name == "mat":
+        os.makedirs("faces", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        cv2.imwrite(f"faces/face_{timestamp}_{idx}.jpg", crop)
+
+        print("────────────────────────")
+        print(f"🙂 Khuôn mặt #{idx}")
+        print(f"📦 YOLO : {conf:.2f}")
+
+        cv2.rectangle(img, (x1,y1), (x2,y2), (0,0,255), 2)
+        cv2.putText(img, "KHUON MAT", (x1, y1-10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
+
+    # ================= STUDENT CARD =================
+    elif cls_name == "the":
+        os.makedirs("sv_cards", exist_ok=True)
+        cv2.imwrite(f"sv_cards/card_{idx}.jpg", crop)
+
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        gray = cv2.GaussianBlur(gray, (3,3), 0)
+        thresh = cv2.adaptiveThreshold(gray,255,
+                                        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                        cv2.THRESH_BINARY,11,2)
+
+        ocr_sv = reader.readtext(thresh, detail=1)
+
+        texts = []
+        for (bbox, text, prob) in ocr_sv:
+            if prob > 0.3:
+                texts.append(text)
+
+        full_text = " | ".join(texts)
+        info = extract_student_info(full_text)
+
+        print("🎯 TRÍCH THÔNG TIN:")
+        for k, v in info.items():
+            print(f"   {k.upper():10}: {v}")
+        print("────────────────────────")
+        print(f"🎓 Thẻ SV #{idx}")
+        print(f"📦 YOLO : {conf:.2f}")
+        print(f"🪪 OCR  : {full_text}")
+
+        cv2.rectangle(img, (x1,y1), (x2,y2), (255,0,0), 2)
+        cv2.rectangle(img, (x1, y1-30), (x1+300, y1), (255,0,0), -1)
+        label = f"{info['student_id']} - {info['name'][:20]}"
+        cv2.rectangle(img, (x1, y1 - 35), (x1 + 480, y1), (255, 0, 0), -1)
+        cv2.putText(img, label, (x1 + 5, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+# =========================
+# 7. HIỂN THỊ KẾT QUẢ
+# =========================
+cv2.imshow("KET QUA", img)
+cv2.imwrite("result.jpg", img)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
 
