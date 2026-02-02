@@ -6,8 +6,26 @@ import os
 import unicodedata
 from ultralytics import YOLO
 import easyocr
+import requests
+import base64
 from datetime import datetime
 
+
+
+def send_to_api(frame, plate, student_info):
+    _, buffer = cv2.imencode('.jpg', frame)
+    img_base64 = base64.b64encode(buffer).decode()
+
+    payload = {
+        "plate": plate,
+        "student": student_info,
+        "image": img_base64
+    }
+
+    try:
+        requests.post("http://127.0.0.1:8000/api/gate-event", json=payload, timeout=3)
+    except:
+        pass
 # ==========================================
 # 1. CẤU HÌNH & KHỞI TẠO (Dùng Cache để chạy nhanh)
 # ==========================================
@@ -123,7 +141,11 @@ def process_frame(img):
             info = extract_student_info(" | ".join(ocr_sv))
             results_data["students"].append(info)
             cv2.rectangle(display_img, (x1, y1), (x2, y2), (255, 0, 0), 2)
+    # ===== GỬI EVENT QUA API =====
+    plate = results_data["plates"][0] if results_data["plates"] else "unknown"
+    student = results_data["students"][0] if results_data["students"] else None
 
+    send_to_api(img, plate, student)
     return display_img, results_data
 
 
@@ -174,3 +196,4 @@ else:
                     if data["students"]: st.table(data["students"])
                 capture = False
         cap.release()
+
