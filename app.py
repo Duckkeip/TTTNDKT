@@ -125,6 +125,14 @@ def vietnamese_plate_correction(text):
 
 
 def extract_student_info(ocr_list):
+    # --- PHẦN LOG DỮ LIỆU THÔ ---
+    # Log này giúp bạn debug xem OCR có đọc sót dòng nào không
+    print("\n" + "="*30)
+    print("DEBUG OCR RAW DATA:")
+    for idx, text in enumerate(ocr_list):
+        print(f"[{idx}]: {text}")
+    print("="*30 + "\n")
+
     data = {
         "Họ và tên": "Không rõ",
         "Ngày sinh": "Không rõ",
@@ -135,18 +143,29 @@ def extract_student_info(ocr_list):
         "Ngày hiệu lực / Hạn tới": "Không rõ"
     }
 
-    # Chuyển list thành chuỗi lớn để tìm các định dạng số cố định
-    full_text = " | ".join(ocr_list).upper()
+    # Chuyển list sang chữ in hoa, không dấu để dễ so khớp từ khóa
+    def simple_clean(t):
+        return "".join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn').upper()
 
-    # 1. Tìm Mã SV (10 số)
+    # Tiền xử lý list để so khớp từ khóa chính xác hơn
+    # Loại bỏ khoảng trắng thừa và chuyển về chữ HOA
+    clean_list = [str(line).strip().upper() for line in ocr_list if line]
+    full_text = " | ".join(clean_list)
+
+    # 1. Tìm Mã SV (Quan trọng nhất)
     mssv_match = re.search(r"\b\d{10}\b", full_text)
-    if mssv_match: data["Mã SV"] = mssv_match.group(0)
+    if mssv_match:
+        data["Mã SV"] = mssv_match.group(0)
+        # Suy luận khóa từ MSSV (ví dụ: 23... -> 2023)
+        if data["Khóa"] == "Không rõ":
+            data["Khóa"] = f"20{data['Mã SV'][:2]}"
 
-    # 2. Tìm Mã thẻ ngân hàng (16 số, bắt đầu bằng 9704)
+    # 2. Tìm Mã thẻ ngân hàng (16 số)
     card_match = re.search(r"9704\s?\d{4}\s?\d{4}\s?\d{4}", full_text)
-    if card_match: data["Mã thẻ ngân hàng"] = card_match.group(0).replace(" ", "")
+    if card_match:
+        data["Mã thẻ ngân hàng"] = card_match.group(0).replace(" ", "")
 
-    # 3. Tìm các mốc thời gian (dd/mm/yyyy và mm/yy)
+    # 3. Tìm các mốc thời gian
     dates = re.findall(r"\d{2}/\d{2}/\d{4}", full_text)
     if dates: data["Ngày sinh"] = dates[0]
 
@@ -154,43 +173,39 @@ def extract_student_info(ocr_list):
     if len(expiry) >= 2:
         data["Ngày hiệu lực / Hạn tới"] = f"{expiry[-2]} - {expiry[-1]}"
 
-    # 4. Duyệt từng phần tử để tìm Họ tên, Khóa, Ngành
-    for i, line in enumerate(ocr_list):
-        line_clean = line.strip().upper()
-
-        # Tìm Họ tên (Dựa vào vị trí dòng)
-        if any(k in line_clean for k in ["HO VA TEN", "HOVATEN", "TEN"]):
-            if ":" in line:
-                data["Họ và tên"] = line.split(":")[-1].strip().title()
+    # 4. Duyệt từng dòng để tìm các thông tin có nhãn (Label)
+    for i, line_clean in enumerate(clean_list):
+        # Kiểm tra từ khóa (chấp nhận cả 'HOVA TEN', 'HO VA TEN', 'HOVATEN')
+        if any(k in line_clean.replace(" ", "") for k in ["HOVATEN", "TEN"]):
+            # Nếu dòng đó chứa tên luôn (Ví dụ: "Hovà tên TRẦN PHẠM...")
+            if len(line_clean) > 10:
+                # Cắt bỏ phần nhãn, lấy phần tên phía sau
+                parts = re.split(r'TEN|:', ocr_list[i], flags=re.IGNORECASE)
+                data["Họ và tên"] = parts[-1].strip().title()
+            # Nếu tên ở dòng kế tiếp (i+1)
             elif i + 1 < len(ocr_list):
                 data["Họ và tên"] = ocr_list[i + 1].strip().title()
+            break
 
-        # Tìm Khóa (Tìm số 4 chữ số nằm gần chữ KHOA)
-        if "KHOA" in line_clean:
-            # Bước 1: Tìm ngay trong dòng đó xem có số 4 chữ số không (ví dụ: KHOA: 2023)
-            year_match = re.search(r"20\d{2}", line)  # Tìm năm bắt đầu bằng 20xx
-            if year_match:
-                data["Khóa"] = year_match.group(0)
+        # 4. CHIẾN THUẬT DỰ PHÒNG (Nếu tên vẫn "Không rõ")
+        # Trên thẻ VAA, tên luôn nằm TRÊN dòng "Ngày sinh"
+    if data["Họ và tên"] == "Không rõ" and data["Ngày sinh"] != "Không rõ":
+        for i, line in enumerate(clean_list):
+            if data["Ngày sinh"] in line and i > 0:
+                # Lấy dòng ngay phía trên dòng Ngày sinh làm tên
+                potential_name = ocr_list[i - 1].strip()
+                if len(potential_name) > 5 and not any(c.isdigit() for c in potential_name):
+                    data["Họ và tên"] = potential_name.title()
 
-            # Bước 2: Nếu dòng đó không có, tìm ở 2 dòng lân cận (phòng trường hợp OCR nhảy dòng)
-            else:
-                context = ""
-                if i > 0: context += ocr_list[i - 1]
-                if i + 1 < len(ocr_list): context += ocr_list[i + 1]
-
-                year_match_context = re.search(r"20\d{2}", context)
-                if year_match_context:
-                    data["Khóa"] = year_match_context.group(0)
-
-        # Tìm Ngành
-        if "NGANH" in line_clean:
-            if ":" in line:
-                data["Ngành"] = line.split(":")[-1].strip()
-            elif i + 1 < len(ocr_list):
-                data["Ngành"] = ocr_list[i + 1].strip()
+        # 5. Tìm Ngành & Khóa (Ghi đè nếu thấy)
+    for i, line in enumerate(clean_list):
+        if "NGANH" in line:
+            data["Ngành"] = ocr_list[i + 1].strip() if i + 1 < len(ocr_list) else "Không rõ"
+        if "KHOA" in line or "KHOO" in line:  # Sửa lỗi OCR đọc nhầm Khóa thành Khoo
+            year = re.search(r"20\d{2}", " ".join(ocr_list[i:i + 2]))
+            if year: data["Khóa"] = year.group(0)
 
     return data
-
 
 def advanced_enhance(image):
     if image is None or image.size == 0:
@@ -225,9 +240,9 @@ def process_frame(img):
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         crop = img[y1:y2, x1:x2]
         if crop.size > 0:
-            # SỬ DỤNG HÀM ENHANCE MỚI
-            enhanced_plate = advanced_enhance(crop)
-            ocr_res = reader.readtext(enhanced_plate, detail=0)
+            # SỬA LỖI Ở ĐÂY: Lấy đúng key "enhanced"
+            res_plate = advanced_enhance(crop)
+            ocr_res = reader.readtext(res_plate["enhanced"], detail=0)
 
             raw_plate = "".join(ocr_res).upper()
             fixed_plate = vietnamese_plate_correction(raw_plate)
@@ -243,31 +258,40 @@ def process_frame(img):
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         cls_name = yolo_sv.names[int(box.cls[0])]
 
-        # Mở rộng vùng cắt một chút (Padding) để không mất mép chữ
+        # Padding mở rộng vùng cắt
         h_img, w_img = img.shape[:2]
-        pad = 10
+        pad = 15
         crop = img[max(0, y1 - pad):min(h_img, y2 + pad), max(0, x1 - pad):min(w_img, x2 + pad)]
 
         if cls_name == "the" and crop.size > 0:
             res = advanced_enhance(crop)
 
-            # Lần 1: Đọc trên ảnh đã Enhanced (Tốt cho MSSV, Số thẻ)
+            # --- HIỂN THỊ ẢNH ĐANG XỬ LÝ LÊN APP ĐỂ CHECK ---
+            with st.expander("🔍 Chi tiết xử lý vùng thẻ (Debug)"):
+                col_c1, col_c2, col_c3 = st.columns(3)
+                col_c1.image(res["raw_resized"], caption="Ảnh Gốc (Resized)")
+                col_c2.image(res["enhanced"], caption="Ảnh Enhanced (CLAHE)")
+                # Nếu bạn muốn xem ảnh mờ hay không, nhìn vào đây là rõ nhất
+
+            # OCR logic
             ocr_list = reader.readtext(res["enhanced"], detail=0)
+            with st.expander("📝 Nhật ký quét chữ (OCR Log)"):
+                st.write("Dữ liệu thô AI đọc được:")
+                st.code(ocr_list)  # Hiển thị dạng code để dễ copy
+
             info = extract_student_info(ocr_list)
 
-            # KIỂM TRA: Nếu thiếu Họ tên hoặc Khóa, quét lại Lần 2 trên ảnh Raw Resized
+            # Fallback logic nếu mờ
             if info["Họ và tên"] == "Không rõ" or info["Khóa"] == "Không rõ":
                 ocr_list_backup = reader.readtext(res["raw_resized"], detail=0)
                 info_backup = extract_student_info(ocr_list_backup)
-
-                # Cập nhật những gì bản cũ thiếu
                 if info["Họ và tên"] == "Không rõ": info["Họ và tên"] = info_backup["Họ và tên"]
                 if info["Khóa"] == "Không rõ": info["Khóa"] = info_backup["Khóa"]
 
             results_data["students"].append(info)
             cv2.rectangle(display_img, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
-    # 3. GỬI API
+    # 3. GỬI API (Chỉ gửi khi có ít nhất 1 trong 2 thông tin)
     if results_data["plates"] or results_data["students"]:
         plate = results_data["plates"][0] if results_data["plates"] else "unknown"
         student = results_data["students"][0] if results_data["students"] else None
