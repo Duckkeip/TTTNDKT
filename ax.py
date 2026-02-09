@@ -15,25 +15,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Khởi tạo bộ nhớ tạm để "ghép cặp" nếu upload nhiều ảnh khác nhau
-if 'pair_data' not in st.session_state:
-    st.session_state.pair_data = {"mssv": None, "plate": None, "raw_info": None}
+
 @st.cache_resource
 def init_db():
+    # Ưu tiên lấy từ Secrets (Cloud) hoặc .env (Local)
     uri = os.getenv("MONGO_URI")
+
+    # Nếu cả 2 đều không có (phòng hờ), mới dùng link cứng hoặc báo lỗi
     if not uri:
         st.error("Chưa cấu hình MONGO_URI trong Secrets hoặc .env!")
         st.stop()
 
     client = MongoClient(uri)
-    db = client["TN"]  # Tên database của bạn
-
-    # Trả về các collection để dùng ở ngoài
-    return db["students"], db["gate_logs"], db["alerts"]
+    return client["TN"]
 
 
-# QUAN TRỌNG: Gán biến ở đây để các hàm khác như get_student_from_db có thể dùng được
-students_col, logs_col, alerts_col = init_db()
+db = init_db()
 
 def send_to_api(frame, plate, student_info):
     """
@@ -202,17 +199,13 @@ def extract_student_info(ocr_list):
         # Tạo bản tạm không dấu để so khớp từ khóa cho chuẩn
         line_no_accent = "".join(
             c for c in unicodedata.normalize('NFD', line) if unicodedata.category(c) != 'Mn').upper()
-        key = line_no_accent.replace(" ", "")
-        if re.search(r'HOVATEN', key):
-            name_part = re.sub(
-                r'H[OỌ].*?V[ÀA].*?T[EÉ]N[:\s]*',
-                '',
-                line,
-                flags=re.IGNORECASE
-            ).strip()
+
+        if any(k in line_no_accent.replace(" ", "") for k in ["HOVATEN", "TEN"]):
+            # Dùng regex xóa sạch phần nhãn (Họ và tên, Hovà tén,...) để lấy tên
+            name_part = re.sub(r'^.*?(H[OỌ].*?T[EÉ]N|TEN)[:\s]*', '', line, flags=re.IGNORECASE).strip()
 
             if len(name_part) > 5:
-                data["Họ và tên"] = name_part.title()
+                data["Họ và tên"] = name_part.title()  # Hoặc .upper() tùy bạn
                 break
 
         # 4. CHIẾN THUẬT DỰ PHÒNG (Nếu tên vẫn "Không rõ")
@@ -268,58 +261,47 @@ def get_student_from_db(student_id):
     return students_col.find_one(query)
 
 
-def check_gate_process(plate_detected, mssv_ocr):
-    """
-    Logic: Không cần đăng ký biển trước.
-    Chỉ so khớp biển số lúc VÀO và lúc RA của cùng 1 thẻ SV.
-    """
+def save_gate_event(plate, raw_info, image_bytes):
+    """Ghi log hoặc Alert vào Database"""
     now = datetime.now()
+    os.makedirs("images", exist_ok=True)
+    img_name = now.strftime("%Y%m%d_%H%M%S") + ".jpg"
+    img_path = f"images/{img_name}"
 
-    # 1. Tìm sinh viên trong DB (Để biết thẻ này có hợp lệ không)
-    student_db = students_col.find_one({"student_id": mssv_ocr})
+    # Lưu ảnh vật lý (Dành cho chạy Local)
+    with open(img_path, "wb") as f:
+        f.write(image_bytes)
+
+    mssv_ocr = raw_info.get("Mã SV", "Không rõ")
+    student_db = get_student_from_db(mssv_ocr)
+
     if not student_db:
-        return "ERROR", f"Thẻ SV {mssv_ocr} không hợp lệ hoặc chưa kích hoạt!"
-
-    # 2. Tìm lượt VÀO (IN) gần nhất của thẻ này mà CHƯA có lượt RA (OUT)
-    last_entry = logs_col.find_one(
-        {"student_id": mssv_ocr, "status": "IN"},
-        sort=[("time", -1)]
-    )
-
-    def clean(p):
-        return "".join(filter(str.isalnum, str(p))).upper()
-
-    # --- TRƯỜNG HỢP: XE ĐANG RA ---
-    if last_entry:
-        plate_at_in = last_entry.get("plate_detected")
-
-        # So khớp biển số lúc này với biển số lúc vào bãi
-        if clean(plate_detected) == clean(plate_at_in):
-            # KHỚP -> Cho ra
-            logs_col.insert_one({
-                "time": now,
-                "student_id": mssv_ocr,
-                "student_name": student_db["full_name"],
-                "plate_detected": plate_detected,
-                "status": "OUT",
-                "note": "Ra bãi thành công (Khớp biển vào)"
-            })
-            return "SUCCESS_OUT", f"MỜI RA! Xe khớp với lúc vào ({plate_at_in})"
-        else:
-            # KHÔNG KHỚP -> Cảnh báo
-            return "ALERT_THEFT", f"⚠️ SAI BIỂN SỐ! Lúc vào đi xe {plate_at_in}, lúc ra lại dắt xe {plate_detected}!"
-
-    # --- TRƯỜNG HỢP: XE ĐANG VÀO ---
-    else:
-        logs_col.insert_one({
+        # Ghi Alert nếu không thấy MSSV
+        alerts_col.insert_one({
             "time": now,
-            "student_id": mssv_ocr,
-            "student_name": student_db["full_name"],
-            "plate_detected": plate_detected,
-            "status": "IN",
-            "note": "Vào bãi"
+            "reason": "Student ID not registered",
+            "student_ocr": raw_info,
+            "plate_detected": plate,
+            "image_path": img_path
         })
-        return "SUCCESS_IN", f"MỜI VÀO! Đã ghi nhận xe {plate_detected} cho SV {student_db['full_name']}"
+        return None, False
+
+    # So khớp biển số
+    def clean_p(p): return "".join(filter(str.isalnum, str(p))).upper()
+
+    is_match = clean_p(plate) == clean_p(student_db.get("plate", ""))
+
+    # Ghi Log thành công
+    logs_col.insert_one({
+        "time": now,
+        "student_id": student_db["student_id"],
+        "student_name": student_db["full_name"],
+        "plate_detected": plate,
+        "image_path": img_path,
+        "status": "IN",
+        "note": "Match plate" if is_match else "Plate mismatch"
+    })
+    return student_db, is_match
 def get_student_from_db(student_id):
     """Tìm kiếm sinh viên linh hoạt (String/Int)"""
     clean_id = str(student_id).strip().replace('"', '')
@@ -377,113 +359,139 @@ def save_gate_event(plate, raw_info, image_bytes):
 # ==========================================
 # 3. HÀM XỬ LÝ CHÍNH (DEEP SCAN)
 # ==========================================
+
 def process_frame(img):
     display_img = img.copy()
     results_data = {"plates": [], "students": []}
 
-    # --- 1. NHẬN DIỆN BIỂN SỐ ---
+    # --- 1. XỬ LÝ BIỂN SỐ ---
     plate_results = yolo_plate.predict(img, conf=0.5, verbose=False)[0]
     for box in plate_results.boxes:
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         crop = img[y1:y2, x1:x2]
         if crop.size > 0:
+            # SỬA LỖI Ở ĐÂY: Lấy đúng key "enhanced"
             res_plate = advanced_enhance(crop)
             ocr_res = reader.readtext(res_plate["enhanced"], detail=0)
+
             raw_plate = "".join(ocr_res).upper()
             fixed_plate = vietnamese_plate_correction(raw_plate)
 
             results_data["plates"].append(fixed_plate)
-            # Vẽ khung xanh lá cho biển số
             cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(display_img, fixed_plate, (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-    # --- 2. NHẬN DIỆN THẺ SINH VIÊN ---
+    # --- 2. XỬ LÝ THẺ SINH VIÊN ---
     sv_results = yolo_sv.predict(img, conf=0.5, verbose=False)[0]
     for box in sv_results.boxes:
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         cls_name = yolo_sv.names[int(box.cls[0])]
 
+        # Padding mở rộng vùng cắt
         h_img, w_img = img.shape[:2]
         pad = 15
         crop = img[max(0, y1 - pad):min(h_img, y2 + pad), max(0, x1 - pad):min(w_img, x2 + pad)]
 
         if cls_name == "the" and crop.size > 0:
+            mssv = raw_info["Mã SV"]
+
+            if mssv != "Không rõ":
+                # Gọi hàm tìm kiếm trực tiếp thay vì requests.get
+                student_db = get_student_from_db(mssv)
+
+                if student_db:
+                    st.success(f"✅ Tìm thấy: {student_db['full_name']}")
+                    # Cập nhật thông tin chuẩn từ DB vào final_info để hiển thị
+                    raw_info["Họ và tên"] = student_db["full_name"]
+                    raw_info["Ngành"] = student_db.get("major", "N/A")
+
+                    # Ghi log sự kiện (Thay thế cho @app.post /api/gate-event)
+                    # Giả sử 'plate_val' là biển số bạn đã nhận diện được trước đó
+                    save_gate_event(plate_val, raw_info, img_encoded_bytes)
+                else:
+                    st.error(f"❌ MSSV {mssv} không tồn tại trên hệ thống!")
             res = advanced_enhance(crop)
 
-            # --- HIỂN THỊ DEBUG (Giữ nguyên theo ý bạn) ---
-            with st.expander("🔍 Chi tiết xử lý vùng thẻ (Debug)"):
-                col_c1, col_c2 = st.columns(2)
-                col_c1.image(res["raw_resized"], caption="Ảnh Gốc")
-                col_c2.image(res["enhanced"], caption="Ảnh Enhanced")
+            # --- HIỂN THỊ ẢNH ĐANG XỬ LÝ LÊN APP ĐỂ CHECK ---
 
+            with st.expander(" Chi tiết xử lý vùng thẻ (Debug)"):col_c1, col_c2, col_c3 = st.columns(3)
+            col_c1.image(res["raw_resized"], caption="Ảnh Gốc (Resized)")
+            col_c2.image(res["enhanced"], caption="Ảnh Enhanced (CLAHE)")
+            # Nếu bạn muốn xem ảnh mờ hay không, nhìn vào đây là rõ nhất
+
+            # 1. OCR đọc chữ từ ảnh
             ocr_list = reader.readtext(res["enhanced"], detail=0)
-            with st.expander("📝 Nhật ký quét chữ (OCR Log)", expanded=False):
+
+            # --- HIỂN THỊ NHẬT KÝ QUÉT CHỮ ---
+            with st.expander(" Nhật ký quét chữ (OCR Log)", expanded=False):
+                st.write("Dữ liệu thô AI đọc được từ ảnh:")
                 st.code(ocr_list)
 
+            # 2. Trích xuất thông tin thô (Lúc này có thể sai dấu/thiếu thông tin)
             raw_info = extract_student_info(ocr_list)
 
-            with st.expander("📊 Chi tiết dữ liệu OCR trích xuất", expanded=True):
+            # Hiển thị dữ liệu thô vừa trích xuất được
+
+            with st.expander(" Chi tiết dữ liệu OCR trích xuất", expanded=True):
+                # Tạo bảng từ dictionary
                 df_raw = pd.DataFrame(list(raw_info.items()), columns=["Trường thông tin", "Giá trị đọc được"])
                 st.table(df_raw)
 
-            # Chỉ thêm vào danh sách nếu quét được Mã SV hợp lệ
-            if raw_info["Mã SV"] != "Không rõ":
-                results_data["students"].append(raw_info)
+            # 3. --- LOGIC ĐỐI CHIẾU QUA API SERVER ---
+            final_info = raw_info.copy()
 
-            # Vẽ khung xanh dương cho thẻ
+            if raw_info["Mã SV"] != "Không rõ":
+                try:
+                    # Gọi API Server để lấy dữ liệu chuẩn từ MongoDB Atlas
+                    # Đảm bảo api_server.py đang chạy ở port 8000
+                    response = requests.get(f"http://127.0.0.1:8000/api/student/{raw_info['Mã SV']}", timeout=5)
+
+                    if response.status_code == 200:
+                        student_db = response.json()
+
+                        # --- HIỂN THỊ BẢNG ĐỐI CHIẾU ---
+                        st.markdown("### 📊 Log đối chiếu: OCR vs Database")
+                        with st.container():
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                st.info("📝 **Kết quả OCR (Thô)**")
+                                st.write(f"- Họ tên: `{raw_info['Họ và tên']}`")
+                                st.write(f"- MSSV: `{raw_info['Mã SV']}`")
+                                st.write(f"- Ngày sinh: `{raw_info['Ngày sinh']}`")
+
+                            with c2:
+                                st.success("✅ **Database (Chuẩn)**")
+                                st.write(f"- Họ tên: **{student_db.get('full_name')}**")
+                                st.write(f"- MSSV: **{student_db.get('student_id')}**")
+                                st.write(f"- Ngày sinh: **{student_db.get('birthday')}**")
+
+                        # GHI ĐÈ DỮ LIỆU CHUẨN ĐỂ HIỂN THỊ & GỬI API
+                        final_info["Họ và tên"] = student_db.get("full_name", raw_info["Họ và tên"])
+                        final_info["Ngành"] = student_db.get("major", raw_info["Ngành"])
+                        final_info["Khóa"] = student_db.get("batch", raw_info["Khóa"])
+                        final_info["Mã thẻ ngân hàng"] = student_db.get("bank_card", raw_info["Mã thẻ ngân hàng"])
+                        final_info["Ngày hiệu lực / Hạn tới"] = student_db.get("expiry_date",
+                                                                               raw_info["Ngày hiệu lực / Hạn tới"])
+
+                    else:
+                        st.error(f"❌ Server báo: Không tìm thấy MSSV {raw_info['Mã SV']} trong Database!")
+
+                except Exception as e:
+                    st.warning(f"⚠️ Không thể kết nối tới API Server để đối chiếu. Lỗi: {e}")
+
+            # Lưu vào danh sách kết quả cuối cùng
+            results_data["students"].append(final_info)
             cv2.rectangle(display_img, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
-    # --- 3. LOGIC KẾT HỢP (PAIRING): CHỈ XỬ LÝ KHI CÓ ĐỦ 2 ĐIỀU KIỆN ---
-    if results_data["students"] and results_data["plates"]:
-        # Lấy dữ liệu đầu tiên tìm thấy
-        main_student = results_data["students"][0]
-        main_plate = results_data["plates"][0]
-        mssv = main_student["Mã SV"]
-
-        # A. Lấy thông tin chuẩn từ Database
-        student_db = get_student_from_db(mssv)
-
-        if student_db:
-            # --- HIỂN THỊ BẢNG ĐỐI CHIẾU ---
-            st.markdown("### 📊 Log đối chiếu: OCR vs Database")
-            with st.container():
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.info("📝 **Kết quả OCR (Thô)**")
-                    st.write(f"- Họ tên: `{main_student['Họ và tên']}`")
-                    st.write(f"- MSSV: `{mssv}`")
-                with c2:
-                    st.success("✅ **Database (Chuẩn)**")
-                    st.write(f"- Họ tên: **{student_db.get('full_name')}**")
-                    st.write(f"- MSSV: **{student_db.get('student_id')}**")
-
-            # Cập nhật thông tin chuẩn để ghi Log
-            final_info = main_student.copy()
-            final_info["Họ và tên"] = student_db.get("full_name")
-            final_info["Ngành"] = student_db.get("major")
-
-            # B. Chạy logic Check Vào/Ra (Chống lấy nhầm xe)
-            # Hàm này sẽ ghi vào gate_logs hoặc alerts
-            res_code, res_msg = check_gate_process(main_plate, mssv)
-
-            if "SUCCESS" in res_code:
-                st.success(f"✅ {res_msg}")
-                # Lưu ảnh vật lý làm bằng chứng (Vì test bằng upload ảnh)
-                now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                cv2.imwrite(f"images/gate_{now_str}.jpg", cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR))
-            else:
-                st.error(f"🚨 CẢNH BÁO: {res_msg}")
-        else:
-            st.error(f"❌ CẢNH BÁO: Thẻ SV {mssv} KHÔNG tồn tại trong Database!")
-
-    elif results_data["students"] and not results_data["plates"]:
-        st.warning("📡 Đã nhận diện được Thẻ. Vui lòng di chuyển xe để thấy rõ Biển số!")
-
-    elif results_data["plates"] and not results_data["students"]:
-        st.warning("📡 Đã nhận diện được Biển số. Vui lòng đưa Thẻ sinh viên vào vùng quét!")
+    # 3. GỬI API (Sử dụng dữ liệu đã được Database sửa lỗi)
+    if results_data["plates"] or results_data["students"]:
+        plate = results_data["plates"][0] if results_data["plates"] else "unknown"
+        student = results_data["students"][0] if results_data["students"] else None
+        send_to_api(img, plate, student)
 
     return display_img, results_data
+
 # ==========================================
 # 4. GIAO DIỆN STREAMLIT
 # ==========================================
@@ -492,50 +500,19 @@ st.title("VAA Hệ thống giữ xe thẻ sinh viên")
 source = st.sidebar.radio("Nguồn đầu vào", ["📷 Camera", "📁 Tải ảnh lên"])
 
 if source == "📁 Tải ảnh lên":
-    file = st.file_uploader("Chọn ảnh (Có thể up lần lượt Thẻ rồi đến Biển số)", type=['jpg', 'png', 'jpeg'])
-
-    # Nút bấm để xóa bộ nhớ tạm nếu muốn quét lượt mới
-    if st.sidebar.button("🗑️ Xóa lượt quét cũ"):
-        st.session_state.pair_data = {"mssv": None, "plate": None, "raw_info": None}
-        st.rerun()
-
+    file = st.file_uploader("Chọn ảnh thẻ SV hoặc Biển số", type=['jpg', 'png', 'jpeg'])
     if file:
         img = cv2.imdecode(np.frombuffer(file.read(), np.uint8), 1)
         res_img, data = process_frame(img)
 
-        # CẬP NHẬT BỘ NHỚ TẠM
+        col1, col2 = st.columns(2)
+        col1.image(img, channels="BGR", caption="Ảnh gốc")
+        col2.image(res_img, channels="BGR", caption="Ảnh nhận diện")
+
+        if data["plates"]: st.success(f"Biển số tìm thấy: {', '.join(data['plates'])}")
         if data["students"]:
-            st.session_state.pair_data["mssv"] = data["students"][0]["Mã SV"]
-            st.session_state.pair_data["raw_info"] = data["students"][0]
-        if data["plates"]:
-            st.session_state.pair_data["plate"] = data["plates"][0]
-
-        # HIỂN THỊ TRẠNG THÁI HIỆN TẠI
-        st.write("### 🛰️ Trạng thái nhận diện hiện tại:")
-        c1, c2 = st.columns(2)
-        c1.metric("Mã SV", st.session_state.pair_data["mssv"] if st.session_state.pair_data["mssv"] else "Đang chờ...")
-        c2.metric("Biển số",
-                  st.session_state.pair_data["plate"] if st.session_state.pair_data["plate"] else "Đang chờ...")
-
-        # LOGIC XỬ LÝ KHI ĐÃ ĐỦ CẢ 2 (Dù ở 2 ảnh khác nhau)
-        pair = st.session_state.pair_data
-        if pair["mssv"] and pair["plate"]:
-            st.divider()
-            st.info(f"🔄 Đang đối chiếu: Thẻ {pair['mssv']} + Biển {pair['plate']}")
-
-            # Gọi lại logic đối chiếu Database y hệt như trong process_frame
-            student_db = get_student_from_db(pair["mssv"])
-            if student_db:
-                res_code, res_msg = check_gate_process(pair["plate"], pair["mssv"])
-                if "SUCCESS" in res_code:
-                    st.success(f"✅ {res_msg}")
-                    st.balloons()
-                else:
-                    st.error(f"🚨 CẢNH BÁO: {res_msg}")
-            else:
-                st.error(f"❌ Thẻ {pair['mssv']} không có trong Database!")
-
-        st.image(res_img, channels="BGR", caption="Ảnh vừa xử lý")
+            st.write("### Thông tin sinh viên:")
+            st.table(data["students"])
 
 else:
     col_vid, col_res = st.columns([2, 1])

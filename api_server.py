@@ -14,10 +14,50 @@ client = MongoClient(MONGO_URI)
 db = client["TN"]
 
 students_col = db["students"]
+
 logs_col = db["gate_logs"]
 alerts_col = db["alerts"]
 
+@app.on_event("startup")
+async def startup_event():
+    print("\n" + "="*50)
+    print("--- API SERVER STARTING ---") # Thay 🚀 bằng chữ thường
+    try:
+        sample = students_col.find_one()
+        if sample:
+            print("DATABASE CONNECTED!")
+            # Dùng repr() để nó hiện mã code nếu có ký tự lạ, không làm sập server
+            print(f"Data Raw: {repr(sample)}")
+        else:
+            print("Cảnh báo: Database rỗng!")
+    except Exception as e:
+        print(f"Lỗi kết nối: {e}")
+    print("="*50 + "\n")
+@app.get("/api/student/{student_id}")
+async def get_student(student_id: str):
+    # 1. In ra console của Server để debug xem Server nhận được gì
+    print(f"🔍 Đang tìm kiếm MSSV: |{student_id}|")
 
+    # 2. Tìm kiếm linh hoạt
+    # Thử tìm dạng String chuẩn, String có ngoặc kép, và dạng Number
+    query = {
+        "$or": [
+            {"student_id": student_id.strip()},
+            {"student_id": f'"{student_id.strip()}"'},
+            {"student_id": int(student_id) if student_id.isdigit() else None}
+        ]
+    }
+
+    student = students_col.find_one(query)
+
+    if student:
+        # Xử lý để trả về JSON (Bỏ qua _id của MongoDB)
+        student["_id"] = str(student["_id"])
+        print(f"✅ Tìm thấy sinh viên: {student['full_name']}")
+        return student
+
+    print(f"❌ Không tìm thấy bất cứ kết quả nào cho: {student_id}")
+    raise HTTPException(status_code=404, detail="Student not found")
 @app.post("/api/gate-event")
 async def receive_event(data: dict):
     try:
@@ -82,12 +122,9 @@ async def receive_event(data: dict):
         # 6. Ghi log vào Database
         logs_col.insert_one({
             "time": now,
-            "student": {
-                "student_id": student_db["student_id"],
-                "name": student_db.get("name", student_info.get("Họ và tên", "Unknown"))
-            },
+            "student_id": student_db["student_id"],  # Lấy MSSV chuẩn
+            "student_name": student_db["full_name"],  # Lấy Tên chuẩn từ DB
             "plate_detected": plate,
-            "plate_registered": student_db.get("plate"),
             "image_path": img_path,
             "status": "IN",
             "note": note
