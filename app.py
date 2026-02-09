@@ -257,11 +257,15 @@ def advanced_enhance(image):
 
 
 def get_student_from_db(student_id):
-    """Tìm kiếm sinh viên linh hoạt (String/Int)"""
+    """Logic tìm kiếm linh hoạt nhất để tránh lỗi kiểu dữ liệu khi Public Cloud"""
+    if not student_id: return None
+
     clean_id = str(student_id).strip().replace('"', '')
+    # Thử tìm kiếm 3 trường hợp: Chữ chuẩn, Chữ có ngoặc, và Số nguyên
     query = {
         "$or": [
             {"student_id": clean_id},
+            {"student_id": f'"{clean_id}"'},
             {"student_id": int(clean_id) if clean_id.isdigit() else None}
         ]
     }
@@ -469,13 +473,12 @@ def process_frame(img):
 
             if "SUCCESS" in res_code:
                 st.success(f"✅ {res_msg}")
-                # Lưu ảnh vật lý làm bằng chứng (Vì test bằng upload ảnh)
-                now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                cv2.imwrite(f"images/gate_{now_str}.jpg", cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR))
+                # Khi chạy trên Cloud, ta không lưu cv2.imwrite (vì Cloud sẽ xóa file)
+                # Thay vào đó, bạn có thể lưu link ảnh nếu dùng Cloud Storage (tùy chọn)
             else:
-                st.error(f"🚨 CẢNH BÁO: {res_msg}")
+                st.error(f"🚨 {res_msg}")
         else:
-            st.error(f"❌ CẢNH BÁO: Thẻ SV {mssv} KHÔNG tồn tại trong Database!")
+            st.error(f"❌ Thẻ SV {mssv} chưa có trong hệ thống!")
 
     elif results_data["students"] and not results_data["plates"]:
         st.warning("📡 Đã nhận diện được Thẻ. Vui lòng di chuyển xe để thấy rõ Biển số!")
@@ -494,49 +497,64 @@ source = st.sidebar.radio("Nguồn đầu vào", ["📷 Camera", "📁 Tải ả
 if source == "📁 Tải ảnh lên":
     file = st.file_uploader("Chọn ảnh (Có thể up lần lượt Thẻ rồi đến Biển số)", type=['jpg', 'png', 'jpeg'])
 
-    # Nút bấm để xóa bộ nhớ tạm nếu muốn quét lượt mới
     if st.sidebar.button("🗑️ Xóa lượt quét cũ"):
-        st.session_state.pair_data = {"mssv": None, "plate": None, "raw_info": None}
+        st.session_state.pair_data = {"mssv": None, "plate": None, "raw_info": None, "db_info": None}
         st.rerun()
 
     if file:
         img = cv2.imdecode(np.frombuffer(file.read(), np.uint8), 1)
         res_img, data = process_frame(img)
 
-        # CẬP NHẬT BỘ NHỚ TẠM
+        # 1. XỬ LÝ KHI CÓ THẺ SV
         if data["students"]:
-            st.session_state.pair_data["mssv"] = data["students"][0]["Mã SV"]
+            current_mssv = data["students"][0]["Mã SV"]
+            st.session_state.pair_data["mssv"] = current_mssv
             st.session_state.pair_data["raw_info"] = data["students"][0]
+            st.write('Thông tin sinh viên')
+            st.table(data['students'])
+            # --- ĐỐI CHIẾU DATABASE NGAY LẬP TỨC ---
+            st.write("🔍 **Đang đối chiếu danh tính từ Database...**")
+            student_db = get_student_from_db(current_mssv)
+
+            if student_db:
+                st.session_state.pair_data["db_info"] = student_db
+                st.success(f"✅ Tìm thấy SV: {student_db.get('full_name')} - {current_mssv}")
+
+                # HIỂN THỊ BẢNG ĐỐI CHIẾU NGANG (Cái Đức cần ở đây)
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.info(f"📝 **OCR đọc được:**\n- Tên: {data['students'][0]['Họ và tên']}\n- MSSV: {current_mssv}")
+                with c2:
+                    st.success(
+                        f"✅ **Database chuẩn:**\n- Tên: {student_db.get('full_name')}\n- MSSV: {student_db.get('student_id')}")
+            else:
+                st.error(f"❌ Thẻ SV {current_mssv} KHÔNG tồn tại trong Database!")
+
+        # 2. XỬ LÝ KHI CÓ BIỂN SỐ
         if data["plates"]:
             st.session_state.pair_data["plate"] = data["plates"][0]
+            st.info(f"📡 Đã nhận diện biển số: {data['plates'][0]}")
 
-        # HIỂN THỊ TRẠNG THÁI HIỆN TẠI
-        st.write("### 🛰️ Trạng thái nhận diện hiện tại:")
-        c1, c2 = st.columns(2)
-        c1.metric("Mã SV", st.session_state.pair_data["mssv"] if st.session_state.pair_data["mssv"] else "Đang chờ...")
-        c2.metric("Biển số",
-                  st.session_state.pair_data["plate"] if st.session_state.pair_data["plate"] else "Đang chờ...")
-
-        # LOGIC XỬ LÝ KHI ĐÃ ĐỦ CẢ 2 (Dù ở 2 ảnh khác nhau)
+        # 3. HIỂN THỊ TRẠNG THÁI TỔNG HỢP
+        st.divider()
+        st.write("### 🛰️ Trạng thái hệ thống")
         pair = st.session_state.pair_data
-        if pair["mssv"] and pair["plate"]:
-            st.divider()
-            st.info(f"🔄 Đang đối chiếu: Thẻ {pair['mssv']} + Biển {pair['plate']}")
+        col_m1, col_m2 = st.columns(2)
+        col_m1.metric("Mã SV", pair["mssv"] if pair["mssv"] else "Chưa có")
+        col_m2.metric("Biển số", pair["plate"] if pair["plate"] else "Chưa có")
 
-            # Gọi lại logic đối chiếu Database y hệt như trong process_frame
-            student_db = get_student_from_db(pair["mssv"])
-            if student_db:
-                res_code, res_msg = check_gate_process(pair["plate"], pair["mssv"])
-                if "SUCCESS" in res_code:
-                    st.success(f"✅ {res_msg}")
-                    st.balloons()
-                else:
-                    st.error(f"🚨 CẢNH BÁO: {res_msg}")
+        # 4. LOGIC GHI VÀO DATABASE (CHỈ CHẠY KHI ĐỦ CẶP)
+        if pair["mssv"] and pair["plate"] and pair["db_info"]:
+            st.warning("🔄 Đang thực hiện ghi nhận lượt xe Ra/Vào...")
+            res_code, res_msg = check_gate_process(pair["plate"], pair["mssv"])
+
+            if "SUCCESS" in res_code:
+                st.success(f"🎉 {res_msg}")
+                st.balloons()
             else:
-                st.error(f"❌ Thẻ {pair['mssv']} không có trong Database!")
+                st.error(f"🚨 CẢNH BÁO: {res_msg}")
 
         st.image(res_img, channels="BGR", caption="Ảnh vừa xử lý")
-
 else:
     col_vid, col_res = st.columns([2, 1])
     with col_vid:
