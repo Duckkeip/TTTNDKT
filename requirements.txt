@@ -1,10 +1,9 @@
 streamlit
-pandas
+streamlit-webrtc
 opencv-python-headless
 numpy
 ultralytics
 easyocr
 pymongo
 python-dotenv
-requests
-streamlit-webrtc
+pandas
