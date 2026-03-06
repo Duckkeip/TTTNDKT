@@ -10,7 +10,7 @@ const LABEL_DIR = path.join(BASE_DIR, "labels");
 const OUT_IMG   = path.join(BASE_DIR, "output", "images");
 const OUT_LABEL = path.join(BASE_DIR, "output", "labels");
 
-const PREFIX = "Cobao";
+const PREFIX = "timing";
 
 // ===== TẠO THƯ MỤC ĐẦU RA =====
 fs.mkdirSync(OUT_IMG, { recursive: true });

@@ -12,46 +12,60 @@ import base64
 from datetime import datetime
 from pymongo import MongoClient
 from dotenv import load_dotenv
-
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
 load_dotenv()
 
 # Khởi tạo bộ nhớ tạm để "ghép cặp" nếu upload nhiều ảnh khác nhau
 if 'pair_data' not in st.session_state:
     st.session_state.pair_data = {"mssv": None, "plate": None, "raw_info": None}
+
+
 @st.cache_resource
 def init_db():
-    uri = os.getenv("MONGO_URI")
+    uri = None
+
+    # Kiểm tra xem có đang chạy trên Cloud (Streamlit Secrets) không
+    try:
+        if "MONGO_URI" in st.secrets:
+            uri = st.secrets["MONGO_URI"]
+    except:
+        # Nếu không có Secrets (đang chạy Local), bỏ qua và tìm ở .env
+        pass
+
+    # Nếu trên Cloud không có, thì tìm ở file .env (Local)
     if not uri:
-        st.error("Chưa cấu hình MONGO_URI trong Secrets hoặc .env!")
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        uri = os.getenv("MONGO_URI")
+
+    if not uri:
+        st.error("❌ Không tìm thấy MONGO_URI trong cả Secrets và file .env!")
         st.stop()
 
-    client = MongoClient(uri)
-    db = client["TN"]  # Tên database của bạn
-
-    # Trả về các collection để dùng ở ngoài
-    return db["students"], db["gate_logs"], db["alerts"]
-
-
+    try:
+        client = MongoClient(uri)
+        db = client["TN"]
+        return db["students"], db["gate_logs"], db["alerts"]
+    except Exception as e:
+        st.error(f"❌ Lỗi kết nối MongoDB: {e}")
+        st.stop()
 # QUAN TRỌNG: Gán biến ở đây để các hàm khác như get_student_from_db có thể dùng được
 students_col, logs_col, alerts_col = init_db()
 
 def send_to_api(frame, plate, student_info):
     """
-    Gửi dữ liệu nhận diện về Server.
-    Đã tối ưu hóa để tương thích với Template sinh viên mới.
+    Ghi trực tiếp vào MongoDB Atlas thay vì gọi qua localhost
     """
-    # 1. Lấy thời gian hiện tại từ máy khách (client)
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    current_time = datetime.now() # Lưu dạng datetime object để dễ truy vấn sau này
 
-    # 2. Xử lý ảnh trước khi gửi
-    # Nếu frame quá lớn, nên resize nhẹ để giảm tải băng thông
+    # 1. Xử lý ảnh (Giữ nguyên logic của bạn)
     h, w = frame.shape[:2]
     if w > 1000:
         new_w = 800
         new_h = int(h * (new_w / w))
         frame = cv2.resize(frame, (new_w, new_h))
 
-    # Nén chất lượng JPEG xuống 70-80% để cân bằng giữa độ nét và tốc độ
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
     success, buffer = cv2.imencode('.jpg', frame, encode_param)
 
@@ -61,35 +75,21 @@ def send_to_api(frame, plate, student_info):
 
     img_base64 = base64.b64encode(buffer).decode()
 
-    # 3. Chuẩn bị Payload
-    # Đảm bảo student_info là dictionary chuẩn từ hàm extract_student_info
+    # 2. Chuẩn bị Payload để lưu thẳng vào DB
     payload = {
         "plate": plate,
-        "student": student_info,  # Gồm Họ tên, MSSV, Ngành, Khóa, Số thẻ, Hạn dùng
+        "student": student_info,
         "image": img_base64,
-        "client_time": current_time
+        "time": current_time,
+        "status": "LOG_ENTRY"
     }
 
-    # 4. Gửi request (Sử dụng khối try-except để không làm sập App Streamlit)
     try:
-        response = requests.post(
-            "http://127.0.0.1:8000/api/gate-event",
-            json=payload,
-            timeout=3  # Timeout ngắn để tránh chờ đợi lâu trong luồng camera
-        )
-
-        if response.status_code == 200:
-            st.toast(f"✅ Đã gửi dữ liệu: {plate}", icon="📡")
-        else:
-            # Ghi log lỗi từ Server phản hồi
-            st.error(f"❌ Server lỗi ({response.status_code}): {response.text}")
-
-    except requests.exceptions.Timeout:
-        st.warning("⚠️ API Server phản hồi quá chậm (Timeout)!")
-    except requests.exceptions.ConnectionError:
-        st.warning("⚠️ Không thể kết nối tới API Server (Check http://127.0.0.1:8000)")
+        # Ghi thẳng vào collection logs_col đã khởi tạo ở trên
+        logs_col.insert_one(payload)
+        st.toast(f"✅ Đã lưu dữ liệu: {plate}", icon="📡")
     except Exception as e:
-        st.error(f"⚠️ Lỗi kết nối: {str(e)}")
+        st.error(f"⚠️ Lỗi lưu Database: {str(e)}")
 # ==========================================
 # 1. CẤU HÌNH & KHỞI TẠO (Dùng Cache để chạy nhanh)
 # ==========================================
@@ -487,13 +487,46 @@ def process_frame(img):
         st.warning("📡 Đã nhận diện được Biển số. Vui lòng đưa Thẻ sinh viên vào vùng quét!")
 
     return display_img, results_data
-# ==========================================
-# 4. GIAO DIỆN STREAMLIT
-# ==========================================
 
+
+# Tạo một lớp để xử lý luồng Video
+class VideoProcessor(VideoTransformerBase):
+    def transform(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+
+        # Gọi hàm xử lý AI của bạn
+        res_img, data = process_frame(img)
+
+        # Trả về khung hình đã được vẽ khung nhận diện
+        return res_img
+
+
+# ==========================================
+# 4. CẤU CẤU HÌNH WEBRTC (Đưa ra ngoài để tối ưu)
+# ==========================================
+class VideoProcessor(VideoTransformerBase):
+    def __init__(self):
+        self.last_data = None
+
+    def transform(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        # Gọi hàm xử lý AI
+        res_img, data = process_frame(img)
+        self.last_data = data
+        return cv2.cvtColor(res_img, cv2.COLOR_BGR2RGB)
+
+
+RTC_CONFIG = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
+
+# ==========================================
+# 5. GIAO DIỆN CHÍNH
+# ==========================================
 st.title("VAA Hệ thống giữ xe thẻ sinh viên")
 source = st.sidebar.radio("Nguồn đầu vào", ["📷 Camera", "📁 Tải ảnh lên"])
 
+# --- TRƯỜNG HỢP 1: TẢI ẢNH LÊN ---
 if source == "📁 Tải ảnh lên":
     file = st.file_uploader("Chọn ảnh (Có thể up lần lượt Thẻ rồi đến Biển số)", type=['jpg', 'png', 'jpeg'])
 
@@ -505,79 +538,57 @@ if source == "📁 Tải ảnh lên":
         img = cv2.imdecode(np.frombuffer(file.read(), np.uint8), 1)
         res_img, data = process_frame(img)
 
-        # 1. XỬ LÝ KHI CÓ THẺ SV
+        # Xử lý logic Thẻ SV
         if data["students"]:
             current_mssv = data["students"][0]["Mã SV"]
             st.session_state.pair_data["mssv"] = current_mssv
             st.session_state.pair_data["raw_info"] = data["students"][0]
-            st.write('Thông tin sinh viên')
-            st.table(data['students'])
-            # --- ĐỐI CHIẾU DATABASE NGAY LẬP TỨC ---
-            st.write("🔍 **Đang đối chiếu danh tính từ Database...**")
-            student_db = get_student_from_db(current_mssv)
 
+            student_db = get_student_from_db(current_mssv)
             if student_db:
                 st.session_state.pair_data["db_info"] = student_db
-                st.success(f"✅ Tìm thấy SV: {student_db.get('full_name')} - {current_mssv}")
-
-                # HIỂN THỊ BẢNG ĐỐI CHIẾU NGANG (Cái Đức cần ở đây)
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.info(f"📝 **OCR đọc được:**\n- Tên: {data['students'][0]['Họ và tên']}\n- MSSV: {current_mssv}")
-                with c2:
-                    st.success(
-                        f"✅ **Database chuẩn:**\n- Tên: {student_db.get('full_name')}\n- MSSV: {student_db.get('student_id')}")
+                st.success(f"✅ Tìm thấy SV: {student_db.get('full_name')}")
             else:
                 st.error(f"❌ Thẻ SV {current_mssv} KHÔNG tồn tại trong Database!")
 
-        # 2. XỬ LÝ KHI CÓ BIỂN SỐ
+        # Xử lý logic Biển số
         if data["plates"]:
             st.session_state.pair_data["plate"] = data["plates"][0]
             st.info(f"📡 Đã nhận diện biển số: {data['plates'][0]}")
 
-        # 3. HIỂN THỊ TRẠNG THÁI TỔNG HỢP
+        # Hiển thị Trạng thái & Ghi Database
         st.divider()
-        st.write("### 🛰️ Trạng thái hệ thống")
         pair = st.session_state.pair_data
         col_m1, col_m2 = st.columns(2)
         col_m1.metric("Mã SV", pair["mssv"] if pair["mssv"] else "Chưa có")
         col_m2.metric("Biển số", pair["plate"] if pair["plate"] else "Chưa có")
 
-        # 4. LOGIC GHI VÀO DATABASE (CHỈ CHẠY KHI ĐỦ CẶP)
         if pair["mssv"] and pair["plate"] and pair["db_info"]:
-            st.warning("🔄 Đang thực hiện ghi nhận lượt xe Ra/Vào...")
             res_code, res_msg = check_gate_process(pair["plate"], pair["mssv"])
-
             if "SUCCESS" in res_code:
                 st.success(f"🎉 {res_msg}")
                 st.balloons()
             else:
                 st.error(f"🚨 CẢNH BÁO: {res_msg}")
 
-        st.image(res_img, channels="BGR", caption="Ảnh vừa xử lý")
+        st.image(res_img, caption="Ảnh vừa xử lý")
+
+# --- TRƯỜNG HỢP 2: DÙNG CAMERA (WEBRTC) ---
 else:
-    col_vid, col_res = st.columns([2, 1])
-    with col_vid:
-        run = st.checkbox("Bật Camera")
-        capture = st.button("📸 CHỤP & QUÉT")
-        window = st.image([])
+    st.info("💡 Hướng dẫn: Đưa Thẻ SV hoặc Biển số vào trước Camera.")
 
-    if run:
-        cap = cv2.VideoCapture(0)
-        while run:
-            ret, frame = cap.read()
-            if not ret: break
+    ctx = webrtc_streamer(
+        key="parking-ai",
+        video_processor_factory=VideoProcessor,
+        rtc_configuration=RTC_CONFIG,
+        media_stream_constraints={"video": True, "audio": False},
+    )
 
-            # Hiển thị luồng trực tiếp
-            window.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-
-            if capture:
-                with col_res:
-                    st.info("Đang phân tích...")
-                    res_img, data = process_frame(frame)
-                    st.image(res_img, channels="BGR")
-                    if data["plates"]: st.success(f"Biển số: {data['plates'][0]}")
-                    if data["students"]: st.table(data["students"])
-                capture = False
-        cap.release()
-
+    if ctx.video_processor:
+        if st.checkbox("Hiển thị nhật ký quét thời gian thực"):
+            data_now = ctx.video_processor.last_data
+            if data_now:
+                if data_now["plates"]:
+                    st.success(f"📡 Biển số: {data_now['plates'][0]}")
+                if data_now["students"]:
+                    st.table(data_now["students"])

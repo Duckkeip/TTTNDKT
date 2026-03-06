@@ -1,11 +1,10 @@
 streamlit
-opencv-python
+pandas
+opencv-python-headless
 numpy
 ultralytics
 easyocr
-pillow
-fastapi
-uvicorn
-requests
-opencv-python
 pymongo
+python-dotenv
+requests
+streamlit-webrtc
