@@ -1,39 +1,37 @@
 # 🚗 Hệ thống AI Giữ xe Thông minh - VAA
 
-Ứng dụng chạy trên nền tảng **Streamlit**, sử dụng mô hình **YOLO** để nhận diện Biển số xe và Thẻ sinh viên, kết hợp với **EasyOCR** để trích xuất thông tin và lưu trữ dữ liệu trên **MongoDB Atlas**.
+Hệ thống quản lý bãi xe thông minh dành cho Học viện Hàng không Việt Nam (VAA). Ứng dụng tích hợp AI để tự động hóa quy trình nhận diện biển số và đối soát thẻ sinh viên, giúp tăng cường an ninh và giảm thời gian chờ đợi.
+
+
 
 ## ✨ Tính năng chính
-- 📷 **Nhận diện thời gian thực:** Quét biển số xe và thẻ sinh viên qua Camera (WebRTC).
-- 📁 **Xử lý ảnh tải lên:** Hỗ trợ tải ảnh trực tiếp để kiểm tra.
-- 🔍 **Đối chiếu Database:** Tự động kiểm tra thông tin sinh viên từ cơ sở dữ liệu MongoDB.
-- 📝 **Ghi nhật ký:** Lưu lịch sử xe ra/vào kèm hình ảnh minh chứng.
-- 🚨 **Cảnh báo:** Thông báo nếu thẻ sinh viên không tồn tại hoặc có sai sót.
+
+- 📷 **Nhận diện thời gian thực:** Tích hợp Camera qua WebRTC để quét biển số xe và thẻ sinh viên trực tiếp.
+- 📁 **Xử lý ảnh tải lên:** Hỗ trợ tải tệp hình ảnh để kiểm tra thủ công.
+- 🔍 **Đối chiếu Database:** Tự động truy vấn và xác thực thông tin sinh viên từ **MongoDB Atlas**.
+- 📝 **Ghi nhật ký:** Lưu lịch sử xe ra/vào với đầy đủ mốc thời gian và hình ảnh minh chứng.
+- 🚨 **Hệ thống cảnh báo:** Thông báo ngay lập tức nếu thẻ sinh viên không hợp lệ hoặc không có trong hệ thống.
 
 ## 🛠 Công nghệ sử dụng
+
 - **Ngôn ngữ:** Python 3.x
-- **Framework:** Streamlit
-- **AI/ML:** YOLO (Ultralytics), EasyOCR
-- **Database:** MongoDB Atlas
-- **Thư viện chính:** OpenCV, Pandas, PyMongo
+- **Giao diện:** [Streamlit](https://streamlit.io/)
+- **Trí tuệ nhân tạo:** - **YOLO (Ultralytics):** Nhận diện vùng chứa biển số và thẻ sinh viên.
+  - **EasyOCR:** Trích xuất ký tự từ vùng ảnh đã nhận diện.
+- **Cơ sở dữ liệu:** MongoDB Atlas (Cloud Database).
+- **Thư viện bổ trợ:** OpenCV, Pandas, PyMongo, Streamlit-WebRTC.
 
-## 🚀 Hướng dẫn cài đặt (Local)
+## 📂 Cấu trúc dự án
 
-1. **Clone repository:**
-   ```bash
-   git clone [https://github.com/ten-user-cua-ban/tttndkt.git](https://github.com/ten-user-cua-ban/tttndkt.git)
-   cd tttndkt
-
-
-
+```text
 TTTNDKT/
 ├── .streamlit/
-│   └── secrets.toml        # (Chỉ dùng ở máy cá nhân, không push lên GitHub)
+│   └── secrets.toml      # Cấu hình bảo mật (Chỉ dùng local)
 ├── models/
-│   ├── Bienso.pt           # Model YOLO nhận diện biển số
-│   └── Thesv.pt            # Model YOLO nhận diện thẻ sinh viên
-├── app.py                  # File code Python chính (đã sửa WebRTC và MongoDB)
-├── requirements.txt        # Danh sách thư viện Python (pip install)
-├── packages.txt            # Danh sách thư viện hệ thống (apt-get)
-├── README.md               # Hướng dẫn sử dụng dự án
-└── .env                    # Lưu MONGO_URI (Dùng ở local, không push lên GitHub)
-   
+│   ├── Bienso.pt         # Model YOLO nhận diện biển số
+│   └── Thesv.pt          # Model YOLO nhận diện thẻ sinh viên
+├── app.py                # Mã nguồn chính của ứng dụng
+├── requirements.txt      # Danh sách thư viện Python
+├── packages.txt          # Thư viện hệ thống cho Streamlit Cloud
+├── README.md             # Hướng dẫn sử dụng
+└── .env                  # Lưu biến môi trường (MONGO_URI)
