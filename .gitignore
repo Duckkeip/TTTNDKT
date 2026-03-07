@@ -1,4 +1,15 @@
+# Bảo mật
 .env
-.streamlit/
-__pycache__/
+.streamlit/secrets.toml
+
+# File nặng & Dữ liệu
+Train.zip
+dataset/
+outputs/
+baocao/    # Nếu bạn không muốn công khai file báo cáo word/pdf
+bat/       # Các file script chạy batch cục bộ
+
+# IDE & Python
 .idea/
+__pycache__/
+venv/
