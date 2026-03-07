@@ -35,3 +35,5 @@ TTTNDKT/
 ├── packages.txt          # Thư viện hệ thống cho Streamlit Cloud
 ├── README.md             # Hướng dẫn sử dụng
 └── .env                  # Lưu biến môi trường (MONGO_URI)
+```
+#HOST tại :https://tttndkt-gydyqubxpuspotangpcbvz.streamlit.app/
