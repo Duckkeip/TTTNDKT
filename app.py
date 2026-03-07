@@ -13,13 +13,18 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
 from services.auth_service import auth_ui
-from payos import PayOS
+# Không cần import PaymentData nữa nếu nó cứ báo lỗi
 load_dotenv()
+from payos import PayOS
+from payos.types import PaymentData
+# Import theo đường dẫn tuyệt đối này để lách lỗi 'cannot import name'
+
 payos = PayOS(
     client_id=os.getenv("PAYOS_CLIENT_ID"),
     api_key=os.getenv("PAYOS_API_KEY"),
     checksum_key=os.getenv("PAYOS_CHECKSUM_KEY")
 )
+order_code = int(datetime.now().timestamp())
 # Khởi tạo bộ nhớ tạm để "ghép cặp" nếu upload nhiều ảnh khác nhau
 if 'pair_data' not in st.session_state:
     st.session_state.pair_data = {"mssv": None, "plate": None, "raw_info": None}
@@ -71,10 +76,54 @@ if not st.session_state.logged_in:
 st.set_page_config(page_title="Hệ thống AI Giữ xe VAA", layout="wide")
 
 # --- HIỂN THỊ THÔNG TIN USER TRÊN SIDEBAR ---
+# --- Kiểm tra đăng nhập ở đầu app.py ---
+if "user_info" not in st.session_state:
+    st.warning("Vui lòng đăng nhập để tiếp tục.")
+    auth_ui() # Gọi hàm đăng nhập của bạn
+    st.stop() # Dừng thực thi các dòng code bên dưới cho đến khi có user_info
 user = st.session_state.user_info
-st.sidebar.markdown(f"### 👤 {user['full_name']}")
 # Tự động check các hóa đơn đang chờ của User này
 pending_orders = list(db["recharge_logs"].find({"student_id": user['student_id'], "status": "PENDING"}))
+
+for order in pending_orders:
+    try:
+        # Sử dụng hàm mới get_payment_link_information thay cho hàm cũ bị cảnh báo
+        info = payos.get_payment_link_information(order["orderCode"])
+
+        if info.status == "PAID":
+            # 1. Cộng tiền vào bảng users (hoặc students tùy DB của bạn)
+            db["users"].update_one(
+                {"student_id": user['student_id']},
+                {"$inc": {"balance": order["amount"]}}
+            )
+            # 2. Cập nhật trạng thái log
+            db["recharge_logs"].update_one(
+                {"orderCode": order["orderCode"]},
+                {"$set": {"status": "PAID"}}
+            )
+            # 3. Cập nhật vào session để Sidebar hiện số mới luôn
+            st.session_state.user_info["balance"] += order["amount"]
+
+            st.toast(f"✅ Nạp thành công {order['amount']:,} VNĐ!", icon="💰")
+            st.rerun()
+    except Exception as e:
+        pass
+
+
+st.sidebar.markdown(f"### 👤 {user['full_name']}")
+
+# Nút đăng xuất
+if st.sidebar.button("🚪 Đăng xuất"):
+    # Xóa trạng thái đăng nhập
+    st.session_state.logged_in = False
+    st.session_state.user_info = None
+    # Xóa các dữ liệu tạm thời khác nếu có
+    if 'pair_data' in st.session_state:
+        del st.session_state.pair_data
+
+    st.success("Đã đăng xuất thành công!")
+    st.rerun()  # Tải lại trang để quay về màn hình đăng nhập
+
 # Hiển thị loại tài khoản
 u_type = "Cán bộ/Giảng viên" if user.get("user_type") == "staff" else "Sinh viên"
 st.sidebar.info(f"🏷️ Loại: {u_type}")
@@ -87,28 +136,7 @@ if st.sidebar.button("Đăng xuất"):
     st.session_state.logged_in = False
     st.rerun()
 
-for order in pending_orders:
-    try:
-        # Hỏi PayOS xem đơn hàng này đã trả tiền chưa
-        info = payos.getPaymentLinkInformation(order["orderCode"])
 
-        if info.status == "PAID":
-            # 1. Cộng tiền vào ví chính của User trong bảng students (hoặc users tùy DB của bạn)
-            db["students"].update_one(
-                {"student_id": user['student_id']},
-                {"$inc": {"balance": order["amount"]}}
-            )
-            # 2. Cập nhật trạng thái log để không cộng trùng
-            db["recharge_logs"].update_one(
-                {"orderCode": order["orderCode"]},
-                {"$set": {"status": "PAID"}}
-            )
-            st.toast(f"✅ Nạp thành công {order['amount']:,} VNĐ!", icon="💰")
-            # Cập nhật lại session để sidebar hiện số dư mới ngay lập tức
-            st.session_state.user_info["balance"] += order["amount"]
-            st.rerun()
-    except Exception as e:
-        pass
 # --- PHÂN QUYỀN GIAO DIỆN ---
 if user.get("role") == "admin":
     menu = st.sidebar.radio("Chức năng Admin", [ "📊 Thống kê hệ thống", "👥 Quản lý người dùng"])
@@ -131,30 +159,50 @@ if menu == "📜 Lịch sử cá nhân":
             st.info("Chưa có lịch sử ra vào.")
 
     with tab2:
-        st.subheader("Nạp tiền tự động qua QR (MoMo/Ngân hàng)")
+        st.subheader("Nạp tiền tự động qua QR (Ngân hàng)")
+
         with st.form("payment_form"):
-            amount = st.number_input("Số tiền (Min 2,000đ)", min_value=2000, step=1000)
+            amount = st.number_input("Số tiền (Min 3,000đ)", min_value=3000, step=1000)
+
             if st.form_submit_button("Tạo mã thanh toán"):
-                order_code = int(datetime.now().timestamp())
-                payment_data = {
-                    "orderCode": order_code,
-                    "amount": amount,
-                    "description": f"NAP TIEN {user['student_id']}",
-                    "cancelUrl": "http://localhost:8501",
-                    "returnUrl": "http://localhost:8501"
-                }
-                pay_link = payos.createPaymentLink(payment_data)
+                try:
+                    # 1. Đảm bảo user_info đã tồn tại (tránh lỗi AttributeError)
+                    if "user_info" not in st.session_state:
+                        st.error("Vui lòng đăng nhập lại!")
+                        st.stop()
 
-                db["recharge_logs"].insert_one({
-                    "orderCode": order_code,
-                    "student_id": user['student_id'],
-                    "amount": amount,
-                    "status": "PENDING",
-                    "time": datetime.now()
-                })
-                st.success("Đã tạo mã QR!")
-                st.info(f"👉 [NHẤN VÀO ĐÂY ĐỂ THANH TOÁN]({pay_link.checkoutUrl})")
+                    user = st.session_state.user_info
+                    order_code = int(datetime.now().timestamp())
+                    final_amount = int(amount)
 
+                    # 2. Khởi tạo PaymentData từ module types của thư viện
+                    # Cách này giúp vượt qua lỗi "is not a PaymentData Type"
+                    payment_data = PaymentData(
+                        orderCode=order_code,
+                        amount=10000,
+                        description="NAP TIEN 123",
+                        cancelUrl="http://localhost:8501",
+                        returnUrl="http://localhost:8501"
+                    )
+                    # 3. Sử dụng hàm viết hoa (Dành cho bản v1.x của bạn)
+                    payment_link = payos.createPaymentLink(payment_data)
+
+
+
+                    # 4. Lưu log vào DB
+                    db["recharge_logs"].insert_one({
+                        "orderCode": order_code,
+                        "student_id": user['student_id'],
+                        "amount": final_amount,
+                        "status": "PENDING",
+                        "time": datetime.now()
+                    })
+
+                    st.success("✅ Đã tạo mã QR thành công!")
+                    st.markdown(f"### [👉 NHẤN VÀO ĐÂY ĐỂ THANH TOÁN]({pay_link.checkoutUrl})")
+
+                except Exception as e:
+                    st.error(f"❌ Lỗi hệ thống: {str(e)}")
 # --- NỘI DUNG CHO ADMIN: THỐNG KÊ ---
 if menu == "📊 Thống kê hệ thống":
     st.title("📊 Báo cáo & Thống kê")
