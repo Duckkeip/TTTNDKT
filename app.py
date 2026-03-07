@@ -7,14 +7,19 @@ import os
 import unicodedata
 from ultralytics import YOLO
 import easyocr
-import requests
 import base64
 from datetime import datetime
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
+from services.auth_service import auth_ui
+from payos import PayOS
 load_dotenv()
-
+payos = PayOS(
+    client_id=os.getenv("PAYOS_CLIENT_ID"),
+    api_key=os.getenv("PAYOS_API_KEY"),
+    checksum_key=os.getenv("PAYOS_CHECKSUM_KEY")
+)
 # Khởi tạo bộ nhớ tạm để "ghép cặp" nếu upload nhiều ảnh khác nhau
 if 'pair_data' not in st.session_state:
     st.session_state.pair_data = {"mssv": None, "plate": None, "raw_info": None}
@@ -52,6 +57,183 @@ def init_db():
         st.stop()
 # QUAN TRỌNG: Gán biến ở đây để các hàm khác như get_student_from_db có thể dùng được
 students_col, logs_col, alerts_col = init_db()
+db = students_col.database
+
+
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+
+if not st.session_state.logged_in:
+    auth_ui(db) # Hiển thị form đăng nhập/đăng ký
+    st.stop()    # Dừng app tại đây nếu chưa đăng nhập thành công
+
+# 3. CẤU HÌNH GIAO DIỆN (Đoạn này chỉ chạy khi đã vượt qua bước 2)
+st.set_page_config(page_title="Hệ thống AI Giữ xe VAA", layout="wide")
+
+# --- HIỂN THỊ THÔNG TIN USER TRÊN SIDEBAR ---
+user = st.session_state.user_info
+st.sidebar.markdown(f"### 👤 {user['full_name']}")
+# Tự động check các hóa đơn đang chờ của User này
+pending_orders = list(db["recharge_logs"].find({"student_id": user['student_id'], "status": "PENDING"}))
+# Hiển thị loại tài khoản
+u_type = "Cán bộ/Giảng viên" if user.get("user_type") == "staff" else "Sinh viên"
+st.sidebar.info(f"🏷️ Loại: {u_type}")
+
+# Chỉ sinh viên mới hiện số dư ví
+if user.get("user_type") != "staff":
+    st.sidebar.write(f"💳 Số dư: **{user['balance']:,} VNĐ**")
+
+if st.sidebar.button("Đăng xuất"):
+    st.session_state.logged_in = False
+    st.rerun()
+
+for order in pending_orders:
+    try:
+        # Hỏi PayOS xem đơn hàng này đã trả tiền chưa
+        info = payos.getPaymentLinkInformation(order["orderCode"])
+
+        if info.status == "PAID":
+            # 1. Cộng tiền vào ví chính của User trong bảng students (hoặc users tùy DB của bạn)
+            db["students"].update_one(
+                {"student_id": user['student_id']},
+                {"$inc": {"balance": order["amount"]}}
+            )
+            # 2. Cập nhật trạng thái log để không cộng trùng
+            db["recharge_logs"].update_one(
+                {"orderCode": order["orderCode"]},
+                {"$set": {"status": "PAID"}}
+            )
+            st.toast(f"✅ Nạp thành công {order['amount']:,} VNĐ!", icon="💰")
+            # Cập nhật lại session để sidebar hiện số dư mới ngay lập tức
+            st.session_state.user_info["balance"] += order["amount"]
+            st.rerun()
+    except Exception as e:
+        pass
+# --- PHÂN QUYỀN GIAO DIỆN ---
+if user.get("role") == "admin":
+    menu = st.sidebar.radio("Chức năng Admin", [ "📊 Thống kê hệ thống", "👥 Quản lý người dùng"])
+else:
+    menu = "📜 Lịch sử cá nhân"
+    st.sidebar.success("Bạn đang ở chế độ xem lịch sử.")
+
+# Nếu là User bình thường, dừng các logic quét ở dưới và chỉ hiện lịch sử
+if menu == "📜 Lịch sử cá nhân":
+    st.title("📜 Lịch sử cá nhân")
+
+    # Tab hiển thị: 1 bên là Lịch sử ra vào, 1 bên là Nạp tiền
+    tab1, tab2 = st.tabs(["🚗 Lịch sử ra vào", "💳 Nạp tiền vào ví"])
+
+    with tab1:
+        my_logs = list(logs_col.find({"student_id": user["student_id"]}).sort("time", -1))
+        if my_logs:
+            st.dataframe(pd.DataFrame(my_logs).drop(columns=["_id"]), use_container_width=True)
+        else:
+            st.info("Chưa có lịch sử ra vào.")
+
+    with tab2:
+        st.subheader("Nạp tiền tự động qua QR (MoMo/Ngân hàng)")
+        with st.form("payment_form"):
+            amount = st.number_input("Số tiền (Min 2,000đ)", min_value=2000, step=1000)
+            if st.form_submit_button("Tạo mã thanh toán"):
+                order_code = int(datetime.now().timestamp())
+                payment_data = {
+                    "orderCode": order_code,
+                    "amount": amount,
+                    "description": f"NAP TIEN {user['student_id']}",
+                    "cancelUrl": "http://localhost:8501",
+                    "returnUrl": "http://localhost:8501"
+                }
+                pay_link = payos.createPaymentLink(payment_data)
+
+                db["recharge_logs"].insert_one({
+                    "orderCode": order_code,
+                    "student_id": user['student_id'],
+                    "amount": amount,
+                    "status": "PENDING",
+                    "time": datetime.now()
+                })
+                st.success("Đã tạo mã QR!")
+                st.info(f"👉 [NHẤN VÀO ĐÂY ĐỂ THANH TOÁN]({pay_link.checkoutUrl})")
+
+# --- NỘI DUNG CHO ADMIN: THỐNG KÊ ---
+if menu == "📊 Thống kê hệ thống":
+    st.title("📊 Báo cáo & Thống kê")
+
+    col1, col2, col3 = st.columns(3)
+    # Lấy dữ liệu thực tế từ DB
+    total_logs = logs_col.count_documents({})
+    total_in = logs_col.count_documents({"status": "IN"})
+    total_alerts = alerts_col.count_documents({})
+
+    col1.metric("Tổng lượt xe", f"{total_logs} lượt")
+    col2.metric("Xe đang trong bãi", f"{total_in} xe")
+    col3.metric("Cảnh báo vi phạm", f"{total_alerts} vụ", delta_color="inverse")
+
+    st.subheader("📝 Nhật ký ra vào mới nhất")
+    all_logs = list(logs_col.find().sort("time", -1).limit(50))
+    if all_logs:
+        st.dataframe(pd.DataFrame(all_logs).drop(columns=["_id"]))
+#ADMIN: Quản lý Users
+if menu == "👥 Quản lý người dùng":
+    st.header("💰 Quản lý Ngân khố & Người dùng")
+
+    # Tạo 2 cột: 1 bên nạp tiền, 1 bên xem danh sách
+    col_nap, col_list = st.columns([1, 2])
+
+    with col_nap:
+        st.subheader("Nạp tiền vào ví")
+        with st.form("recharge_form"):
+            target_mssv = st.text_input("Nhập MSSV cần nạp")
+            amount = st.number_input("Số tiền nạp (VNĐ)", min_value=1000, step=1000)
+            reason = st.selectbox("Hình thức", ["Chuyển khoản Ngân hàng", "Tiền mặt", "Khuyến mãi"])
+            submit_nap = st.form_submit_button("Xác nhận nạp tiền")
+
+            if submit_nap:
+                # Kiểm tra user có tồn tại không
+                target_user = db["users"].find_one({"student_id": target_mssv})
+                if target_user:
+                    # Lệnh $inc để cộng dồn tiền vào balance
+                    db["users"].update_one(
+                        {"student_id": target_mssv},
+                        {"$inc": {"balance": amount}}
+                    )
+                    # Ghi lại lịch sử nạp tiền vào collection giao dịch (tùy chọn)
+                    st.success(f"✅ Đã nạp {amount:,} VNĐ cho SV {target_user['full_name']}")
+                    st.balloons()
+                else:
+                    st.error("❌ không tìm thấy sinh viên này!")
+
+    with col_list:
+        st.subheader("Danh sách người dùng")
+        # 1. Lấy dữ liệu từ MongoDB
+        all_users = list(db["users"].find({}, {"password": 0}))
+
+        if all_users:
+            df_users = pd.DataFrame(all_users)
+
+            # 2. ĐỊNH NGHĨA BẢN ĐỒ ĐỔI TÊN (Key cũ: Key mới)
+            # Hãy đảm bảo các Key bên trái khớp chính xác với field trong MongoDB của bạn
+            name_map = {
+                "student_id": "MSSV",
+                "full_name": "Họ và tên",
+                "user_type": "Loại",
+                "balance": "Số tiền"
+            }
+
+            # 3. KIỂM TRA VÀ BỔ SUNG CỘT THIẾU (Tránh lỗi nếu DB trống)
+            for old_key in name_map.keys():
+                if old_key not in df_users.columns:
+                    df_users[old_key] = 0 if old_key == "balance" else "N/A"
+
+            # 4. THỰC HIỆN ĐỔI TÊN
+            df_display = df_users.rename(columns=name_map)
+
+            # 5. CHỌN CÁC CỘT ĐÃ ĐỔI TÊN ĐỂ HIỂN THỊ
+            cols_to_show = ["MSSV", "Họ và tên", "Loại", "Số tiền"]
+            st.dataframe(df_display[cols_to_show], use_container_width=True)
+        else:
+            st.info("Chưa có người dùng nào.")
+
 
 def send_to_api(frame, plate, student_info):
     """
@@ -273,18 +455,19 @@ def get_student_from_db(student_id):
 
 
 def check_gate_process(plate_detected, mssv_ocr):
-    """
-    Logic: Không cần đăng ký biển trước.
-    Chỉ so khớp biển số lúc VÀO và lúc RA của cùng 1 thẻ SV.
-    """
     now = datetime.now()
+    users_col = db["users"]  # Sử dụng collection users mới
 
-    # 1. Tìm sinh viên trong DB (Để biết thẻ này có hợp lệ không)
-    student_db = students_col.find_one({"student_id": mssv_ocr})
-    if not student_db:
-        return "ERROR", f"Thẻ SV {mssv_ocr} không hợp lệ hoặc chưa kích hoạt!"
+    # 1. Tìm thông tin người dùng trong collection users
+    user_data = users_col.find_one({"student_id": mssv_ocr})
+    if not user_data:
+        return "ERROR", f"Tài khoản {mssv_ocr} không tồn tại trên hệ thống!"
 
-    # 2. Tìm lượt VÀO (IN) gần nhất của thẻ này mà CHƯA có lượt RA (OUT)
+    # 2. Xác định phí (Cán bộ miễn phí, Sinh viên 3000đ)
+    is_staff = (user_data.get("user_type") == "staff")
+    fee = 0 if is_staff else 3000
+
+    # 3. Tìm lượt VÀO (IN) gần nhất
     last_entry = logs_col.find_one(
         {"student_id": mssv_ocr, "status": "IN"},
         sort=[("time", -1)]
@@ -293,37 +476,44 @@ def check_gate_process(plate_detected, mssv_ocr):
     def clean(p):
         return "".join(filter(str.isalnum, str(p))).upper()
 
-    # --- TRƯỜNG HỢP: XE ĐANG RA ---
+    # --- TRƯỜNG HỢP: XE ĐANG RA (OUT) ---
     if last_entry:
         plate_at_in = last_entry.get("plate_detected")
-
-        # So khớp biển số lúc này với biển số lúc vào bãi
         if clean(plate_detected) == clean(plate_at_in):
-            # KHỚP -> Cho ra
+
+            # Kiểm tra tiền nếu là sinh viên
+            if not is_staff and user_data["balance"] < fee:
+                return "LOW_BALANCE", f"Số dư không đủ ({user_data['balance']:,} VNĐ). Cần 3,000 VNĐ để ra!"
+
+            # Thực hiện trừ tiền trong DB
+            if fee > 0:
+                users_col.update_one({"student_id": mssv_ocr}, {"$inc": {"balance": -fee}})
+
+            # Ghi log RA
             logs_col.insert_one({
                 "time": now,
                 "student_id": mssv_ocr,
-                "student_name": student_db["full_name"],
+                "student_name": user_data["full_name"],
                 "plate_detected": plate_detected,
                 "status": "OUT",
-                "note": "Ra bãi thành công (Khớp biển vào)"
+                "fee_charged": fee,
+                "note": "Ra bãi thành công"
             })
-            return "SUCCESS_OUT", f"MỜI RA! Xe khớp với lúc vào ({plate_at_in})"
+            return "SUCCESS_OUT", f"MỜI RA! Phí: {fee:,} VNĐ. Số dư còn lại: {user_data['balance'] - fee:,} VNĐ"
         else:
-            # KHÔNG KHỚP -> Cảnh báo
-            return "ALERT_THEFT", f"⚠️ SAI BIỂN SỐ! Lúc vào đi xe {plate_at_in}, lúc ra lại dắt xe {plate_detected}!"
+            return "ALERT_THEFT", f"⚠️ SAI BIỂN SỐ! Vào: {plate_at_in} - Ra: {plate_detected}"
 
-    # --- TRƯỜNG HỢP: XE ĐANG VÀO ---
+    # --- TRƯỜNG HỢP: XE ĐANG VÀO (IN) ---
     else:
         logs_col.insert_one({
             "time": now,
             "student_id": mssv_ocr,
-            "student_name": student_db["full_name"],
+            "student_name": user_data["full_name"],
             "plate_detected": plate_detected,
             "status": "IN",
             "note": "Vào bãi"
         })
-        return "SUCCESS_IN", f"MỜI VÀO! Đã ghi nhận xe {plate_detected} cho SV {student_db['full_name']}"
+        return "SUCCESS_IN", f"MỜI VÀO! Chào {user_data['full_name']} ({u_type})"
 def get_student_from_db(student_id):
     """Tìm kiếm sinh viên linh hoạt (String/Int)"""
     clean_id = str(student_id).strip().replace('"', '')

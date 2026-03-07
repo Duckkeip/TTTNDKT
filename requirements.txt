@@ -7,3 +7,4 @@ easyocr
 pymongo
 python-dotenv
 pandas
+payos

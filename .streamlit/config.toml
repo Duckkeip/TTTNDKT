@@ -1,0 +1,6 @@
+[theme]
+primaryColor = "#003366"          # Màu xanh đậm đặc trưng của VAA
+backgroundColor = "#F0F2F6"       # Màu nền xám nhạt
+secondaryBackgroundColor = "#FFFFFF" # Màu của Sidebar
+textColor = "#262730"
+font = "sans serif"
