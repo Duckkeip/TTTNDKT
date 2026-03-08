@@ -1,7 +1,7 @@
 streamlit
 streamlit-webrtc
 numpy==1.26.4
-opencv-python-headless==4.9.0.80
+opencv-python-headless==4.8.1.78
 numpy
 ultralytics
 easyocr
