@@ -9,3 +9,4 @@ pymongo
 python-dotenv
 pandas
 payos
+setuptools<70
