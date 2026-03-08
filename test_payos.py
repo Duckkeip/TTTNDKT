@@ -7,7 +7,7 @@ payos = PayOS(
 )
 
 data = {
-    "orderCode": 123456,
+    "orderCode": 233456,
     "amount": 2000,
     "description": "TEST",
     "cancelUrl": "http://localhost",
@@ -16,4 +16,4 @@ data = {
 
 link = payos.payment_requests.create(data)
 
-print(link.checkoutUrl)
+print(link.checkout_url)

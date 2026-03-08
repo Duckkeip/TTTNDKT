@@ -24,7 +24,7 @@ payos = PayOS(
     api_key=os.getenv("PAYOS_API_KEY"),
     checksum_key=os.getenv("PAYOS_CHECKSUM_KEY")
 )
-order_code = int(datetime.now().timestamp())
+order_code = int(datetime.now().timestamp() * 1000)
 # Khởi tạo bộ nhớ tạm để "ghép cặp" nếu upload nhiều ảnh khác nhau
 if 'pair_data' not in st.session_state:
     st.session_state.pair_data = {"mssv": None, "plate": None, "raw_info": None}
@@ -64,54 +64,76 @@ def init_db():
 students_col, logs_col, alerts_col = init_db()
 db = students_col.database
 
-
+# Khởi tạo các biến session cần thiết
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
+if 'user_info' not in st.session_state:
+    st.session_state.user_info = None
+# --- 2. KIỂM TRA ĐĂNG NHẬP (Gộp logic để tránh văng app) ---
+# Nếu chưa logged_in HOẶC chưa có user_info, hiển thị form đăng nhập
+# ===== Khôi phục session sau khi PayOS redirect =====
+params = st.query_params
 
-if not st.session_state.logged_in:
-    auth_ui(db) # Hiển thị form đăng nhập/đăng ký
-    st.stop()    # Dừng app tại đây nếu chưa đăng nhập thành công
+if "payment" in params and "sid" in params:
+    sid = params["sid"]
+
+    user_data = db["users"].find_one({"student_id": sid})
+
+    if user_data:
+        st.session_state.logged_in = True
+        st.session_state.user_info = user_data
+if not st.session_state.logged_in or st.session_state.user_info is None:
+    auth_ui(db) # Truyền db vào để thực hiện query login
+    st.stop() # Dừng tại đây, không chạy các dòng code bên dưới
+
+user = st.session_state.user_info
+# Tìm các đơn hàng PENDING của user này
+# --- LOGIC KIỂM TRA VÀ CỘNG TIỀN (SỬA LẠI) ---
+pending_orders = list(db["recharge_logs"].find({
+    "student_id": user['student_id'],
+    "status": "PENDING"
+}))
+
+if pending_orders:
+    with st.expander("🔍 Nhật ký kiểm tra thanh toán (Debug)", expanded=True):
+
+        for order in pending_orders:
+            try:
+                # API mới
+                info = payos.payment_requests.get(order["orderCode"])
+                print(info)
+                st.write(f"🔸 Đơn {order['orderCode']}: Trạng thái = **{info.status}**")
+
+                if info.status == "PAID":
+
+                    users_collection = students_col.database["users"]
+
+                    result = users_collection.update_one(
+                        {"student_id": user['student_id']},
+                        {"$inc": {"balance": int(order["amount"])}}
+                    )
+
+                    if result.modified_count > 0:
+
+                        db["recharge_logs"].update_one(
+                            {"orderCode": order["orderCode"]},
+                            {"$set": {"status": "PAID"}}
+                        )
+
+                        st.session_state.user_info["balance"] += int(order["amount"])
+
+                        st.success(f"✅ Đã cộng {order['amount']:,} VNĐ!")
+                        st.rerun()
+
+            except Exception as e:
+                st.error(str(e))
 
 # 3. CẤU HÌNH GIAO DIỆN (Đoạn này chỉ chạy khi đã vượt qua bước 2)
 st.set_page_config(page_title="Hệ thống AI Giữ xe VAA", layout="wide")
 
-# --- HIỂN THỊ THÔNG TIN USER TRÊN SIDEBAR ---
-# --- Kiểm tra đăng nhập ở đầu app.py ---
-if "user_info" not in st.session_state:
-    st.warning("Vui lòng đăng nhập để tiếp tục.")
-    auth_ui() # Gọi hàm đăng nhập của bạn
-    st.stop() # Dừng thực thi các dòng code bên dưới cho đến khi có user_info
-user = st.session_state.user_info
-# Tự động check các hóa đơn đang chờ của User này
-pending_orders = list(db["recharge_logs"].find({"student_id": user['student_id'], "status": "PENDING"}))
-
-for order in pending_orders:
-    try:
-        # Sử dụng hàm mới get_payment_link_information thay cho hàm cũ bị cảnh báo
-        info = payos.get_payment_link_information(order["orderCode"])
-
-        if info.status == "PAID":
-            # 1. Cộng tiền vào bảng users (hoặc students tùy DB của bạn)
-            db["users"].update_one(
-                {"student_id": user['student_id']},
-                {"$inc": {"balance": order["amount"]}}
-            )
-            # 2. Cập nhật trạng thái log
-            db["recharge_logs"].update_one(
-                {"orderCode": order["orderCode"]},
-                {"$set": {"status": "PAID"}}
-            )
-            # 3. Cập nhật vào session để Sidebar hiện số mới luôn
-            st.session_state.user_info["balance"] += order["amount"]
-
-            st.toast(f"✅ Nạp thành công {order['amount']:,} VNĐ!", icon="💰")
-            st.rerun()
-    except Exception as e:
-        pass
-
-
 st.sidebar.markdown(f"### 👤 {user['full_name']}")
-
+# Chỉ sinh viên mới hiện số dư ví
+st.sidebar.markdown(f"💳 **Số dư:** `{user.get('balance', 0):,}` VNĐ")
 # Nút đăng xuất
 if st.sidebar.button("🚪 Đăng xuất"):
     # Xóa trạng thái đăng nhập
@@ -127,14 +149,6 @@ if st.sidebar.button("🚪 Đăng xuất"):
 # Hiển thị loại tài khoản
 u_type = "Cán bộ/Giảng viên" if user.get("user_type") == "staff" else "Sinh viên"
 st.sidebar.info(f"🏷️ Loại: {u_type}")
-
-# Chỉ sinh viên mới hiện số dư ví
-if user.get("user_type") != "staff":
-    st.sidebar.write(f"💳 Số dư: **{user['balance']:,} VNĐ**")
-
-if st.sidebar.button("Đăng xuất"):
-    st.session_state.logged_in = False
-    st.rerun()
 
 
 # --- PHÂN QUYỀN GIAO DIỆN ---
@@ -166,30 +180,23 @@ if menu == "📜 Lịch sử cá nhân":
 
             if st.form_submit_button("Tạo mã thanh toán"):
                 try:
-                    # 1. Đảm bảo user_info đã tồn tại (tránh lỗi AttributeError)
-                    if "user_info" not in st.session_state:
-                        st.error("Vui lòng đăng nhập lại!")
-                        st.stop()
-
-                    user = st.session_state.user_info
-                    order_code = int(datetime.now().timestamp())
+                    order_code = int(datetime.now().timestamp() * 1000)
                     final_amount = int(amount)
 
-                    # 2. Khởi tạo PaymentData từ module types của thư viện
-                    # Cách này giúp vượt qua lỗi "is not a PaymentData Type"
-                    payment_data = PaymentData(
-                        orderCode=order_code,
-                        amount=10000,
-                        description="NAP TIEN 123",
-                        cancelUrl="http://localhost:8501",
-                        returnUrl="http://localhost:8501"
-                    )
-                    # 3. Sử dụng hàm viết hoa (Dành cho bản v1.x của bạn)
-                    payment_link = payos.createPaymentLink(payment_data)
+                    payment_data = {
+                        "orderCode": order_code,
+                        "amount": final_amount,
+                        "description": f"NAPTIEN {user['student_id']}"[:25],
+                        "returnUrl": f"http://localhost:8501/?payment=success&sid={user['student_id']}",
+                        "cancelUrl": "http://localhost:8501/?payment=cancel"
+                    }
 
+                    # API mới của PayOS
+                    pay_link = payos.payment_requests.create(payment_data)
 
+                    checkout_url = pay_link.checkout_url
 
-                    # 4. Lưu log vào DB
+                    # Lưu log
                     db["recharge_logs"].insert_one({
                         "orderCode": order_code,
                         "student_id": user['student_id'],
@@ -198,11 +205,14 @@ if menu == "📜 Lịch sử cá nhân":
                         "time": datetime.now()
                     })
 
-                    st.success("✅ Đã tạo mã QR thành công!")
-                    st.markdown(f"### [👉 NHẤN VÀO ĐÂY ĐỂ THANH TOÁN]({pay_link.checkoutUrl})")
+                    st.success("✅ Đã tạo mã thanh toán!")
+
+                    st.markdown(
+                        f"### 👉 [Nhấn vào đây để thanh toán]({checkout_url})"
+                    )
 
                 except Exception as e:
-                    st.error(f"❌ Lỗi hệ thống: {str(e)}")
+                    st.error(f"❌ Lỗi: {str(e)}")
 # --- NỘI DUNG CHO ADMIN: THỐNG KÊ ---
 if menu == "📊 Thống kê hệ thống":
     st.title("📊 Báo cáo & Thống kê")
@@ -761,11 +771,27 @@ RTC_CONFIG = RTCConfiguration(
 # ==========================================
 # 5. GIAO DIỆN CHÍNH
 # ==========================================
+user = st.session_state.user_info
+
+# Kiểm tra nếu role KHÔNG PHẢI admin (Dựa trên ảnh MongoDB của bạn)
+if user.get("role") != "admin":
+
+    # Hiển thị số dư cho sinh viên xem thay vì form quét thẻ
+
+    st.metric("Số dư tài khoản hiện tại", f"{user.get('balance', 0):,} VNĐ")
+
+    # Dừng app tại đây để sinh viên không thấy phần Camera/Upload bên dưới
+    st.stop()
+
+# --- NẾU LÀ ADMIN, TIẾP TỤC HIỂN THỊ GIAO DIỆN CHÍNH ---
 st.title("VAA Hệ thống giữ xe thẻ sinh viên")
+st.success(f"🔓 Chế độ Admin: {user['full_name']}")
+
 source = st.sidebar.radio("Nguồn đầu vào", ["📷 Camera", "📁 Tải ảnh lên"])
 
 # --- TRƯỜNG HỢP 1: TẢI ẢNH LÊN ---
 if source == "📁 Tải ảnh lên":
+    # (Giữ nguyên toàn bộ code xử lý File Uploader của bạn ở đây...)
     file = st.file_uploader("Chọn ảnh (Có thể up lần lượt Thẻ rồi đến Biển số)", type=['jpg', 'png', 'jpeg'])
 
     if st.sidebar.button("🗑️ Xóa lượt quét cũ"):
