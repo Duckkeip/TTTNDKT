@@ -187,8 +187,8 @@ if menu == "📜 Lịch sử cá nhân":
                         "orderCode": order_code,
                         "amount": final_amount,
                         "description": f"NAPTIEN {user['student_id']}"[:25],
-                        "returnUrl": f"http://localhost:8501/?payment=success&sid={user['student_id']}",
-                        "cancelUrl": "http://localhost:8501/?payment=cancel"
+                        "return_url": "https://vaagate.streamlit.app",
+                        "cancel_url": "https://vaagate.streamlit.app"
                     }
 
                     # API mới của PayOS
