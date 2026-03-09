@@ -36,4 +36,4 @@ TTTNDKT/
 ├── README.md             # Hướng dẫn sử dụng
 └── .env                  # Lưu biến môi trường (MONGO_URI)
 ```
-#HOST tại :https://tttndkt-gydyqubxpuspotangpcbvz.streamlit.app/
+#HOST tại :[https://tttndkt-gydyqubxpuspotangpcbvz.streamlit.app/](https://vaagate.streamlit.app/)
