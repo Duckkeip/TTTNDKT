@@ -8,15 +8,16 @@ import unicodedata
 from ultralytics import YOLO
 import easyocr
 import base64
-from datetime import datetime
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
 from services.auth_service import auth_ui
-# Không cần import PaymentData nữa nếu nó cứ báo lỗi
+
 load_dotenv()
 from payos import PayOS
-from payos.types import PaymentData
+from payos.types import CreatePaymentLinkRequest
+import pytz
+from datetime import datetime, timedelta
 # Import theo đường dẫn tuyệt đối này để lách lỗi 'cannot import name'
 
 payos = PayOS(
@@ -25,6 +26,7 @@ payos = PayOS(
     checksum_key=os.getenv("PAYOS_CHECKSUM_KEY")
 )
 order_code = int(datetime.now().timestamp() * 1000)
+vn_tz = pytz.timezone('Asia/Ho_Chi_Minh')
 # Khởi tạo bộ nhớ tạm để "ghép cặp" nếu upload nhiều ảnh khác nhau
 if 'pair_data' not in st.session_state:
     st.session_state.pair_data = {"mssv": None, "plate": None, "raw_info": None}
@@ -89,44 +91,172 @@ if not st.session_state.logged_in or st.session_state.user_info is None:
 user = st.session_state.user_info
 # Tìm các đơn hàng PENDING của user này
 # --- LOGIC KIỂM TRA VÀ CỘNG TIỀN (SỬA LẠI) ---
-pending_orders = list(db["recharge_logs"].find({
-    "student_id": user['student_id'],
-    "status": "PENDING"
-}))
+# Lấy tất cả lịch sử nạp tiền của user này (không chỉ PENDING) để hiển thị đầy đủ
+all_orders = list(db["recharge_logs"].find({
+    "student_id": user['student_id']
+}).sort("time", -1))  # Sắp xếp đơn mới nhất lên đầu
+with st.expander("📜 Lịch sử giao dịch", expanded=True):
+    # Tạo bộ lọc ngày tháng
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        start_date = st.date_input("Từ ngày", value=datetime.now(vn_tz) - timedelta(days=7))
+    with col_f2:
+        end_date = st.date_input("Đến ngày", value=datetime.now())
+    # Reset trang về 1 nếu thay đổi bộ lọc
+    if 'last_start_date' not in st.session_state or st.session_state.last_start_date != start_date:
+        st.session_state.current_page = 1
+        st.session_state.last_start_date = start_date
+    # 2. Lấy dữ liệu từ MongoDB
+    # Chuyển đổi start_date và end_date sang datetime để query
+    query = {
+        "student_id": user['student_id'],
+        "time": {
+            "$gte": datetime.combine(start_date, datetime.min.time()),
+            "$lte": datetime.combine(end_date, datetime.max.time())
+        }
+    }
 
-if pending_orders:
-    with st.expander("🔍 Nhật ký kiểm tra thanh toán (Debug)", expanded=True):
+    all_orders = list(db["recharge_logs"].find(query).sort("time", -1))
+    if all_orders:
+            # Tạo danh sách để hiển thị bảng
+            display_data = []
+            # Bảng ánh xạ trạng thái sang tiếng Việt
+            status_map = {
+                "PAID": "✅ ĐÃ TRẢ",
+                "PENDING": "⏳ ĐANG CHỜ",
+                "CANCELLED": "❌ HỦY",
+                "EXPIRED": "⚠️ HẾT HẠN"
+            }
 
-        for order in pending_orders:
-            try:
-                # API mới
-                info = payos.payment_requests.get(order["orderCode"])
-                print(info)
-                st.write(f"🔸 Đơn {order['orderCode']}: Trạng thái = **{info.status}**")
+            for order in all_orders:
+                raw_time = order["time"]
+                now = datetime.now()
+                current_status = order["status"]
+                # Không thực hiện astimezone nữa để tránh bị cộng thêm 7 tiếng
+                vn_time_display = raw_time.strftime("%d/%m/%Y %H:%M:%S")
+                # Nếu đơn đang PENDING, phải hỏi PayOS xem khách đã HỦY chưa
+                if current_status == "PENDING" and now - raw_time < timedelta(minutes=15):
+                    try:
+                        # Dùng đúng hàm get_payment_link_info hoặc getPaymentLinkInformation
+                        payos_info = payos.payment_requests.get(order["orderCode"])
+                        st.write("PAYOS STATUS:", payos_info.status)
+                        if payos_info.status in ["CANCELLED", "EXPIRED"]:
+                            # Cập nhật ngay vào DB để lần sau không cần hỏi lại PayOS nữa
+                            current_status = payos_info.status
 
-                if info.status == "PAID":
+                            db["recharge_logs"].update_one(
+                                {"orderCode": order["orderCode"]},
+                                {"$set": {"status": current_status}}
+                            )
 
-                    users_collection = students_col.database["users"]
+                        elif payos_info.status == "PAID":
+                            # Thực hiện cộng tiền vào MongoDB bảng 'users'
+                            users_collection = students_col.database["users"]
+                            result = users_collection.update_one(
+                                {"student_id": user['student_id']},
+                                {"$inc": {"balance": int(order["amount"])}}
+                            )
 
-                    result = users_collection.update_one(
-                        {"student_id": user['student_id']},
-                        {"$inc": {"balance": int(order["amount"])}}
-                    )
+                            if result.modified_count > 0:
+                                db["recharge_logs"].update_one(
+                                    {"orderCode": order["orderCode"]},
+                                    {"$set": {"status": "PAID"}}
+                                )
+                                current_status = "PAID"
+                                st.session_state.user_info["balance"] += int(order["amount"])
+                                st.toast(f"💰 Đã cộng {order['amount']:,} VNĐ!", icon="✅")
+                                st.rerun()
+                    except:
+                        pass  # Nếu lỗi API PayOS thì bỏ qua để hiện PENDING tiếp
+                display_data.append({
+                    "Mã đơn hàng": str(order["orderCode"]),
+                    "Ngày giao dịch": vn_time_display,
+                    "Số tiền": f"{order['amount']:,} VNĐ",
+                    "Tình trạng": status_map.get(current_status, current_status)
+                })
 
-                    if result.modified_count > 0:
+            df = pd.DataFrame(display_data)
 
-                        db["recharge_logs"].update_one(
-                            {"orderCode": order["orderCode"]},
-                            {"$set": {"status": "PAID"}}
-                        )
+            rows_per_page = 5
+            total_rows = len(df)
+            total_pages = (total_rows // rows_per_page) + (1 if total_rows % rows_per_page > 0 else 0)
 
-                        st.session_state.user_info["balance"] += int(order["amount"])
+            # Hiển thị bảng
+            start_idx = (st.session_state.current_page - 1) * rows_per_page
+            st.dataframe(
+                df.iloc[start_idx: start_idx + rows_per_page],
+                use_container_width=True,
+                hide_index=True,
+                column_config={"Mã đơn hàng": st.column_config.TextColumn("Mã đơn hàng")}  # Căn trái
+            )
 
-                        st.success(f"✅ Đã cộng {order['amount']:,} VNĐ!")
-                        st.rerun()
+            # --- LOGIC PHÂN TRANG RÚT GỌN (1 ... 10 11 12 ... 100) ---
+            if total_pages > 1:
+                st.write("---")
 
-            except Exception as e:
-                st.error(str(e))
+
+                # Hàm xác định các số trang cần hiển thị
+                def get_page_range(current, total):
+                    if total <= 7:
+                        return list(range(1, total + 1))
+
+                    pages = [1]
+                    if current > 3:
+                        pages.append("...")
+
+                    # Hiển thị các trang xung quanh trang hiện tại
+                    for i in range(max(2, current - 1), min(total, current + 2)):
+                        pages.append(i)
+
+                    if current < total - 2:
+                        pages.append("...")
+
+                    pages.append(total)
+                    return pages
+
+
+                page_range = get_page_range(st.session_state.current_page, total_pages)
+
+                # Tạo các cột để căn giữa (Cột trống - Cụm nút - Cột trống)
+                # Tỉ lệ [2, 6, 2] giúp cụm nút ở giữa rộng và cân đối
+                empty_l, center_col, empty_r = st.columns([1, 8, 1])
+
+                with center_col:
+                    # Tạo số lượng cột tương ứng với các nút cần hiện (Prev + Page Range + Next)
+                    n_cols = len(page_range) + 2
+                    btn_cols = st.columns(n_cols)
+
+                    # 1. Nút Trước (Prev)
+                    with btn_cols[0]:
+                        if st.button("⬅️", disabled=(st.session_state.current_page == 1), use_container_width=True):
+                            st.session_state.current_page -= 1
+                            st.rerun()
+
+                    # 2. Các nút số trang và dấu "..."
+                    for idx, pg in enumerate(page_range):
+                        with btn_cols[idx + 1]:
+                            if pg == "...":
+                                st.write("<p style='text-align:center; padding-top:5px;'>...</p>",
+                                         unsafe_allow_html=True)
+                            else:
+                                # Đổi màu nút nếu là trang hiện tại
+                                btn_type = "primary" if pg == st.session_state.current_page else "secondary"
+                                if st.button(str(pg), type=btn_type, use_container_width=True):
+                                    st.session_state.current_page = pg
+                                    st.rerun()
+
+                    # 3. Nút Sau (Next)
+                    with btn_cols[-1]:
+                        if st.button("➡️", disabled=(st.session_state.current_page == total_pages),
+                                     use_container_width=True):
+                            st.session_state.current_page += 1
+                            st.rerun()
+
+                st.markdown(
+                    f"<p style='text-align: center; color: gray;'>Đang xem trang {st.session_state.current_page} / {total_pages}</p>",
+                    unsafe_allow_html=True)
+    else:
+        st.info("Chưa có lịch sử nạp tiền trong khoảng thời gian này.")
 
 # 3. CẤU HÌNH GIAO DIỆN (Đoạn này chỉ chạy khi đã vượt qua bước 2)
 st.set_page_config(page_title="Hệ thống AI Giữ xe VAA", layout="wide")
@@ -134,17 +264,7 @@ st.set_page_config(page_title="Hệ thống AI Giữ xe VAA", layout="wide")
 st.sidebar.markdown(f"### 👤 {user['full_name']}")
 # Chỉ sinh viên mới hiện số dư ví
 st.sidebar.markdown(f"💳 **Số dư:** `{user.get('balance', 0):,}` VNĐ")
-# Nút đăng xuất
-if st.sidebar.button("🚪 Đăng xuất"):
-    # Xóa trạng thái đăng nhập
-    st.session_state.logged_in = False
-    st.session_state.user_info = None
-    # Xóa các dữ liệu tạm thời khác nếu có
-    if 'pair_data' in st.session_state:
-        del st.session_state.pair_data
 
-    st.success("Đã đăng xuất thành công!")
-    st.rerun()  # Tải lại trang để quay về màn hình đăng nhập
 
 # Hiển thị loại tài khoản
 u_type = "Cán bộ/Giảng viên" if user.get("user_type") == "staff" else "Sinh viên"
@@ -156,7 +276,17 @@ if user.get("role") == "admin":
     menu = st.sidebar.radio("Chức năng Admin", [ "📊 Thống kê hệ thống", "👥 Quản lý người dùng"])
 else:
     menu = "📜 Lịch sử cá nhân"
-    st.sidebar.success("Bạn đang ở chế độ xem lịch sử.")
+    # Nút đăng xuất
+    if st.sidebar.button("🚪 Đăng xuất"):
+        # Xóa trạng thái đăng nhập
+        st.session_state.logged_in = False
+        st.session_state.user_info = None
+        # Xóa các dữ liệu tạm thời khác nếu có
+        if 'pair_data' in st.session_state:
+            del st.session_state.pair_data
+
+        st.success("Đã đăng xuất thành công!")
+        st.rerun()  # Tải lại trang để quay về màn hình đăng nhập
 
 # Nếu là User bình thường, dừng các logic quét ở dưới và chỉ hiện lịch sử
 if menu == "📜 Lịch sử cá nhân":
@@ -183,13 +313,13 @@ if menu == "📜 Lịch sử cá nhân":
                     order_code = int(datetime.now().timestamp() * 1000)
                     final_amount = int(amount)
 
-                    payment_data = {
-                        "orderCode": order_code,
-                        "amount": final_amount,
-                        "description": f"NAPTIEN {user['student_id']}"[:25],
-                        "return_url": "https://vaagate.streamlit.app",
-                        "cancel_url": "https://vaagate.streamlit.app"
-                    }
+                    payment_data = CreatePaymentLinkRequest(
+                        orderCode=order_code,
+                        amount=final_amount,
+                        description=f"NAPTIEN {user['student_id']}"[:25],
+                        returnUrl="https://vaagate.streamlit.app/?payment=success",
+                        cancelUrl="https://vaagate.streamlit.app/?payment=cancel"
+                    )
 
                     # API mới của PayOS
                     pay_link = payos.payment_requests.create(payment_data)
@@ -207,10 +337,8 @@ if menu == "📜 Lịch sử cá nhân":
 
                     st.success("✅ Đã tạo mã thanh toán!")
 
-                    st.markdown(
-                        f"### 👉 [Nhấn vào đây để thanh toán]({checkout_url})"
-                    )
-
+                    st.markdown(f"**Vui lòng quét mã QR bên dưới để hoàn tất:**")
+                    st.components.v1.iframe(checkout_url, height=700, scrolling=True)
                 except Exception as e:
                     st.error(f"❌ Lỗi: {str(e)}")
 # --- NỘI DUNG CHO ADMIN: THỐNG KÊ ---
@@ -778,7 +906,7 @@ if user.get("role") != "admin":
 
     # Hiển thị số dư cho sinh viên xem thay vì form quét thẻ
 
-    st.metric("Số dư tài khoản hiện tại", f"{user.get('balance', 0):,} VNĐ")
+
 
     # Dừng app tại đây để sinh viên không thấy phần Camera/Upload bên dưới
     st.stop()
