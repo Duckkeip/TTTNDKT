@@ -1,13 +1,13 @@
 
 <img width="1578" height="376" alt="image" src="https://github.com/user-attachments/assets/b3b4425f-92d0-423d-86e2-3e9ffb9fd0e8" />
 
-# 🚗 Hệ thống AI Giữ xe Thông minh - VAA
+#  Hệ thống AI Giữ xe Thông minh - VAA
 
 Hệ thống quản lý bãi xe thông minh dành cho Học viện Hàng không Việt Nam (VAA). Ứng dụng tích hợp AI để tự động hóa quy trình nhận diện biển số và đối soát thẻ sinh viên, giúp tăng cường an ninh và giảm thời gian chờ đợi.
 
 
 
-## ✨ Tính năng chính
+##  Tính năng chính
 
 - 📷 **Nhận diện thời gian thực:** Tích hợp Camera qua WebRTC để quét biển số xe và thẻ sinh viên trực tiếp.
 - 📁 **Xử lý ảnh tải lên:** Hỗ trợ tải tệp hình ảnh để kiểm tra thủ công.
@@ -20,8 +20,9 @@ Hệ thống quản lý bãi xe thông minh dành cho Học viện Hàng không 
 - **Ngôn ngữ:** Python 3.x
 - **Giao diện:** [Streamlit](https://streamlit.io/)
 - **Trí tuệ nhân tạo:** - **YOLO (Ultralytics):** Nhận diện vùng chứa biển số và thẻ sinh viên.
-  - **EasyOCR:** Trích xuất ký tự từ vùng ảnh đã nhận diện.
+- **EasyOCR:** Trích xuất ký tự từ vùng ảnh đã nhận diện.
 - **Cơ sở dữ liệu:** MongoDB Atlas (Cloud Database).
+- **Chức năng thanh toán:** PayOS.
 - **Thư viện bổ trợ:** OpenCV, Pandas, PyMongo, Streamlit-WebRTC.
 
 ## 📂 Cấu trúc dự án
