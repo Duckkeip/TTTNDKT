@@ -357,20 +357,33 @@ if menu == "📊 Thống kê hệ thống":
     st.title("📊 Báo cáo & Thống kê")
 
     col1, col2, col3 = st.columns(3)
-    # Lấy dữ liệu thực tế từ DB
+
     total_logs = logs_col.count_documents({})
-    total_in = logs_col.count_documents({"status": "IN"})
     total_alerts = alerts_col.count_documents({})
 
+    pipeline = [
+        {"$sort": {"time": -1}},
+        {
+            "$group": {
+                "_id": "$plate",
+                "last_status": {"$first": "$status"}
+            }
+        },
+        {"$match": {"last_status": "IN"}}
+    ]
+
+    vehicles_inside = len(list(logs_col.aggregate(pipeline)))
+
     col1.metric("Tổng lượt xe", f"{total_logs} lượt")
-    col2.metric("Xe đang trong bãi", f"{total_in} xe")
+    col2.metric("Xe đang trong bãi", f"{vehicles_inside} xe")
     col3.metric("Cảnh báo vi phạm", f"{total_alerts} vụ", delta_color="inverse")
 
     st.subheader("📝 Nhật ký ra vào mới nhất")
+
     all_logs = list(logs_col.find().sort("time", -1).limit(50))
-    df = pd.DataFrame(all_logs)
-    df["time"] = df["time"].dt.tz_localize(None)
     if all_logs:
+        df = pd.DataFrame(all_logs)
+        df["time"] = pd.to_datetime(df["time"]).dt.strftime("%d-%m-%Y %H:%M:%S")
         st.dataframe(df.drop(columns=["_id"]))
 #ADMIN: Quản lý Users
 if menu == "👥 Quản lý người dùng":
