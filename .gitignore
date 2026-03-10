@@ -1,6 +1,7 @@
 # Bảo mật
 .env
 .streamlit/secrets.toml
+.devcontainer
 
 # File nặng & Dữ liệu
 Train.zip
