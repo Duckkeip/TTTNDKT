@@ -383,7 +383,8 @@ if menu == "📊 Thống kê hệ thống":
     all_logs = list(logs_col.find().sort("time", -1).limit(50))
     if all_logs:
         df = pd.DataFrame(all_logs)
-        df["time"] = pd.to_datetime(df["time"]).dt.strftime("%d-%m-%Y %H:%M:%S")
+        df["time"] = pd.to_datetime(df["time"]).dt.tz_localize("UTC").dt.tz_convert("Asia/Ho_Chi_Minh")
+        df["time"] = df["time"].dt.strftime("%d-%m-%Y %H:%M:%S")
         st.dataframe(df.drop(columns=["_id"]))
 #ADMIN: Quản lý Users
 if menu == "👥 Quản lý người dùng":
