@@ -31,7 +31,9 @@ vn_tz = pytz.timezone('Asia/Ho_Chi_Minh')
 if 'pair_data' not in st.session_state:
     st.session_state.pair_data = {"mssv": None, "plate": None, "raw_info": None}
 
-
+SCAN_COOLDOWN = 4
+if "last_scan_time" not in st.session_state:
+    st.session_state.last_scan_time = {}
 @st.cache_resource
 def init_db():
     uri = None
@@ -341,7 +343,7 @@ if menu == "📜 Lịch sử cá nhân":
                         "student_id": user['student_id'],
                         "amount": final_amount,
                         "status": "PENDING",
-                        "time": datetime.now()
+                        "time": datetime.now(vn_tz)
                     })
 
                     st.success("✅ Đã tạo mã thanh toán!")
@@ -366,8 +368,10 @@ if menu == "📊 Thống kê hệ thống":
 
     st.subheader("📝 Nhật ký ra vào mới nhất")
     all_logs = list(logs_col.find().sort("time", -1).limit(50))
+    df = pd.DataFrame(all_logs)
+    df["time"] = df["time"].dt.tz_localize(None)
     if all_logs:
-        st.dataframe(pd.DataFrame(all_logs).drop(columns=["_id"]))
+        st.dataframe(df.drop(columns=["_id"]))
 #ADMIN: Quản lý Users
 if menu == "👥 Quản lý người dùng":
     st.header("💰 Quản lý Ngân khố & Người dùng")
@@ -434,7 +438,7 @@ def send_to_api(frame, plate, student_info):
     """
     Ghi trực tiếp vào MongoDB Atlas thay vì gọi qua localhost
     """
-    current_time = datetime.now() # Lưu dạng datetime object để dễ truy vấn sau này
+    current_time = datetime.now(vn_tz) # Lưu dạng datetime object để dễ truy vấn sau này
 
     # 1. Xử lý ảnh (Giữ nguyên logic của bạn)
     h, w = frame.shape[:2]
@@ -650,7 +654,7 @@ def get_student_from_db(student_id):
 
 
 def check_gate_process(plate_detected, mssv_ocr):
-    now = datetime.now()
+    now = datetime.now(vn_tz)
     users_col = db["users"]  # Sử dụng collection users mới
 
     # 1. Tìm thông tin người dùng trong collection users
@@ -663,8 +667,8 @@ def check_gate_process(plate_detected, mssv_ocr):
     fee = 0 if is_staff else 3000
 
     # 3. Tìm lượt VÀO (IN) gần nhất
-    last_entry = logs_col.find_one(
-        {"student_id": mssv_ocr, "status": "IN"},
+    last_log = logs_col.find_one(
+        {"student_id": mssv_ocr},
         sort=[("time", -1)]
     )
 
@@ -672,43 +676,45 @@ def check_gate_process(plate_detected, mssv_ocr):
         return "".join(filter(str.isalnum, str(p))).upper()
 
     # --- TRƯỜNG HỢP: XE ĐANG RA (OUT) ---
-    if last_entry:
-        plate_at_in = last_entry.get("plate_detected")
+    # --- XE ĐANG TRONG BÃI ---
+    if last_log and last_log["status"] == "IN":
+
+        plate_at_in = last_log.get("plate_detected")
+
         if clean(plate_detected) == clean(plate_at_in):
 
-            # Kiểm tra tiền nếu là sinh viên
             if not is_staff and user_data["balance"] < fee:
-                return "LOW_BALANCE", f"Số dư không đủ ({user_data['balance']:,} VNĐ). Cần 3,000 VNĐ để ra!"
+                return "LOW_BALANCE", "Số dư không đủ!"
 
-            # Thực hiện trừ tiền trong DB
             if fee > 0:
-                users_col.update_one({"student_id": mssv_ocr}, {"$inc": {"balance": -fee}})
+                users_col.update_one(
+                    {"student_id": mssv_ocr},
+                    {"$inc": {"balance": -fee}}
+                )
 
-            # Ghi log RA
             logs_col.insert_one({
                 "time": now,
                 "student_id": mssv_ocr,
                 "student_name": user_data["full_name"],
                 "plate_detected": plate_detected,
                 "status": "OUT",
-                "fee_charged": fee,
-                "note": "Ra bãi thành công"
+                "fee_charged": fee
             })
-            return "SUCCESS_OUT", f"MỜI RA! Phí: {fee:,} VNĐ. Số dư còn lại: {user_data['balance'] - fee:,} VNĐ"
-        else:
-            return "ALERT_THEFT", f"⚠️ SAI BIỂN SỐ! Vào: {plate_at_in} - Ra: {plate_detected}"
 
-    # --- TRƯỜNG HỢP: XE ĐANG VÀO (IN) ---
+            return "SUCCESS_OUT", "Xe ra bãi"
+
+    # --- XE ĐANG NGOÀI ---
     else:
+
         logs_col.insert_one({
             "time": now,
             "student_id": mssv_ocr,
             "student_name": user_data["full_name"],
             "plate_detected": plate_detected,
-            "status": "IN",
-            "note": "Vào bãi"
+            "status": "IN"
         })
-        return "SUCCESS_IN", f"MỜI VÀO! Chào {user_data['full_name']} ({u_type})"
+
+        return "SUCCESS_IN", "Xe vào bãi"
 def get_student_from_db(student_id):
     """Tìm kiếm sinh viên linh hoạt (String/Int)"""
     clean_id = str(student_id).strip().replace('"', '')
@@ -723,7 +729,7 @@ def get_student_from_db(student_id):
 
 def save_gate_event(plate, raw_info, image_bytes):
     """Ghi log hoặc Alert vào Database"""
-    now = datetime.now()
+    now = datetime.now(vn_tz)
     os.makedirs("images", exist_ok=True)
     img_name = now.strftime("%Y%m%d_%H%M%S") + ".jpg"
     img_path = f"images/{img_name}"
@@ -854,6 +860,16 @@ def process_frame(img):
 
             # B. Chạy logic Check Vào/Ra (Chống lấy nhầm xe)
             # Hàm này sẽ ghi vào gate_logs hoặc alerts
+            now = datetime.now(vn_tz)
+
+            last_time = st.session_state.last_scan_time.get(mssv)
+
+            if last_time and (now - last_time).total_seconds() < SCAN_COOLDOWN:
+                return display_img, results_data
+
+            # cập nhật thời gian quét
+            st.session_state.last_scan_time[mssv] = now
+
             res_code, res_msg = check_gate_process(main_plate, mssv)
 
             if "SUCCESS" in res_code:
