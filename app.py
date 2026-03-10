@@ -271,7 +271,7 @@ def get_user_balance():
     return user["balance"]
 balance = get_user_balance()
 st.sidebar.markdown(f"💳 **Số dư:** `{balance:,}` VNĐ")
-
+st.autorefresh(interval=7000)
 
 # Hiển thị loại tài khoản
 u_type = "Cán bộ/Giảng viên" if user.get("user_type") == "staff" else "Sinh viên"
@@ -310,7 +310,7 @@ if menu == "📜 Lịch sử cá nhân":
             st.info("Chưa có lịch sử ra vào.")
 
     with tab2:
-        st.autorefresh(interval=7000)
+
         st.subheader("Nạp tiền tự động qua QR (Ngân hàng)")
 
         with st.form("payment_form"):
