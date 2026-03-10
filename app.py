@@ -268,7 +268,7 @@ st.sidebar.markdown(f"### 👤 {user['full_name']}")
 def get_user_balance():
     user = db["users"].find_one({"student_id": st.session_state.user_info["student_id"]})
     st.session_state.user_info = user
-    st.autorefresh(interval=7000)
+
     return user["balance"]
 balance = get_user_balance()
 st.sidebar.markdown(f"💳 **Số dư:** `{balance:,}` VNĐ")
@@ -311,7 +311,7 @@ if menu == "📜 Lịch sử cá nhân":
             st.info("Chưa có lịch sử ra vào.")
 
     with tab2:
-
+        st.autorefresh(interval=7000)
         st.subheader("Nạp tiền tự động qua QR (Ngân hàng)")
 
         with st.form("payment_form"):
