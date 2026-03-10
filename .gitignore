@@ -14,3 +14,4 @@ bat/       # Các file script chạy batch cục bộ
 .idea/
 __pycache__/
 venv/
+bat/run_ai.bat
