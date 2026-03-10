@@ -26,14 +26,14 @@ Hệ thống quản lý bãi xe thông minh dành cho Học viện Hàng không 
 ```text
 TTTNDKT/
 ├── .streamlit/
-│   └── secrets.toml      # Cấu hình bảo mật (Chỉ dùng local)
+│   └── secrets.toml      # Cấu hình bảo mật (Không push public)
 ├── models/
 │   ├── Bienso.pt         # Model YOLO nhận diện biển số
 │   └── Thesv.pt          # Model YOLO nhận diện thẻ sinh viên
 ├── app.py                # Mã nguồn chính của ứng dụng
-├── requirements.txt      # Danh sách thư viện Python
-├── packages.txt          # Thư viện hệ thống cho Streamlit Cloud
-├── README.md             # Hướng dẫn sử dụng
-└── .env                  # Lưu biến môi trường (MONGO_URI)
+├── requirements.txt      # Danh sách thư viện Python (pip)
+├── packages.txt          # Thư viện hệ thống (dùng cho Streamlit Cloud)
+├── README.md             # Hướng dẫn dự án
+└── .env                  # Lưu biến môi trường MONGO_URI (Không push public)
 ```
 ### HOST tại: **[https://vaagate.streamlit.app/](https://vaagate.streamlit.app/)**
