@@ -263,7 +263,13 @@ st.set_page_config(page_title="Hệ thống AI Giữ xe VAA", layout="wide")
 
 st.sidebar.markdown(f"### 👤 {user['full_name']}")
 # Chỉ sinh viên mới hiện số dư ví
-st.sidebar.markdown(f"💳 **Số dư:** `{user.get('balance', 0):,}` VNĐ")
+
+def get_user_balance():
+    user = db["users"].find_one({"student_id": st.session_state.user_info["student_id"]})
+    st.session_state.user_info = user
+    return user["balance"]
+balance = get_user_balance()
+st.sidebar.markdown(f"💳 **Số dư:** `{balance:,}` VNĐ")
 
 
 # Hiển thị loại tài khoản
@@ -913,7 +919,7 @@ if user.get("role") != "admin":
 
 # --- NẾU LÀ ADMIN, TIẾP TỤC HIỂN THỊ GIAO DIỆN CHÍNH ---
 st.title("VAA Hệ thống giữ xe thẻ sinh viên")
-st.success(f"🔓 Chế độ Admin: {user['full_name']}")
+
 
 source = st.sidebar.radio("Nguồn đầu vào", ["📷 Camera", "📁 Tải ảnh lên"])
 
