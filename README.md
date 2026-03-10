@@ -1,3 +1,6 @@
+
+<img width="1578" height="376" alt="image" src="https://github.com/user-attachments/assets/b3b4425f-92d0-423d-86e2-3e9ffb9fd0e8" />
+
 # 🚗 Hệ thống AI Giữ xe Thông minh - VAA
 
 Hệ thống quản lý bãi xe thông minh dành cho Học viện Hàng không Việt Nam (VAA). Ứng dụng tích hợp AI để tự động hóa quy trình nhận diện biển số và đối soát thẻ sinh viên, giúp tăng cường an ninh và giảm thời gian chờ đợi.
