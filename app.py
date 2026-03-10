@@ -89,6 +89,7 @@ if not st.session_state.logged_in or st.session_state.user_info is None:
     st.stop() # Dừng tại đây, không chạy các dòng code bên dưới
 
 user = st.session_state.user_info
+
 # Tìm các đơn hàng PENDING của user này
 # --- LOGIC KIỂM TRA VÀ CỘNG TIỀN (SỬA LẠI) ---
 # Lấy tất cả lịch sử nạp tiền của user này (không chỉ PENDING) để hiển thị đầy đủ
@@ -309,6 +310,7 @@ if menu == "📜 Lịch sử cá nhân":
             st.info("Chưa có lịch sử ra vào.")
 
     with tab2:
+        st.autorefresh(interval=7000)
         st.subheader("Nạp tiền tự động qua QR (Ngân hàng)")
 
         with st.form("payment_form"):
