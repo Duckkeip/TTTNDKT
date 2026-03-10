@@ -89,7 +89,7 @@ if not st.session_state.logged_in or st.session_state.user_info is None:
     st.stop() # Dừng tại đây, không chạy các dòng code bên dưới
 
 user = st.session_state.user_info
-
+st.autorefresh(interval=7000)
 # Tìm các đơn hàng PENDING của user này
 # --- LOGIC KIỂM TRA VÀ CỘNG TIỀN (SỬA LẠI) ---
 # Lấy tất cả lịch sử nạp tiền của user này (không chỉ PENDING) để hiển thị đầy đủ
@@ -271,7 +271,7 @@ def get_user_balance():
     return user["balance"]
 balance = get_user_balance()
 st.sidebar.markdown(f"💳 **Số dư:** `{balance:,}` VNĐ")
-st.autorefresh(interval=7000)
+
 
 # Hiển thị loại tài khoản
 u_type = "Cán bộ/Giảng viên" if user.get("user_type") == "staff" else "Sinh viên"
