@@ -28,6 +28,7 @@ payos = PayOS(
     checksum_key=os.getenv("PAYOS_CHECKSUM_KEY")
 )
 order_code = int(datetime.now().timestamp() * 1000)
+expire_time = int(time.time() + 600)
 vn_tz = pytz.timezone('Asia/Ho_Chi_Minh')
 # Khởi tạo bộ nhớ tạm để "ghép cặp" nếu upload nhiều ảnh khác nhau
 if 'pair_data' not in st.session_state:
@@ -335,7 +336,7 @@ if menu == "📜 Lịch sử cá nhân":
                         description=f"NAPTIEN {user['student_id']}"[:25],
                         returnUrl="https://vaagate.streamlit.app/?payment=success",
                         cancelUrl="https://vaagate.streamlit.app/?payment=cancel",
-                        
+                        expiresAt=expire_time
                     )
 
                     # API mới của PayOS
@@ -353,11 +354,11 @@ if menu == "📜 Lịch sử cá nhân":
                     })
                     
                     st.success("✅ Đã tạo mã thanh toán!")
+                    st.markdown(f"**Vui lòng quét mã QR bên dưới để hoàn tất:**")
+                    st.components.v1.iframe(st.session_state.checkout_url, height=700, scrolling=True)
                 except Exception as e:
                     st.error(f"❌ Lỗi: {str(e)}")
-            if "checkout_url" in st.session_state:
-                st.markdown(f"**Vui lòng quét mã QR bên dưới để hoàn tất:**")
-                st.components.v1.iframe(st.session_state.checkout_url, height=700, scrolling=True)
+            
 # --- NỘI DUNG CHO ADMIN: THỐNG KÊ ---
 if menu == "📊 Thống kê hệ thống":
     st.title("📊 Báo cáo & Thống kê")
