@@ -355,8 +355,8 @@ if menu == "📜 Lịch sử cá nhân":
                 except Exception as e:
                     st.error(f"❌ Lỗi: {str(e)}")
             if "checkout_url" in st.session_state:
-            st.markdown(f"**Vui lòng quét mã QR bên dưới để hoàn tất:**")
-            st.components.v1.iframe(st.session_state.checkout_url, height=700, scrolling=True)
+                st.markdown(f"**Vui lòng quét mã QR bên dưới để hoàn tất:**")
+                st.components.v1.iframe(st.session_state.checkout_url, height=700, scrolling=True)
 # --- NỘI DUNG CHO ADMIN: THỐNG KÊ ---
 if menu == "📊 Thống kê hệ thống":
     st.title("📊 Báo cáo & Thống kê")
