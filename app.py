@@ -8,6 +8,7 @@ import unicodedata
 from ultralytics import YOLO
 import easyocr
 import base64
+import time
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
