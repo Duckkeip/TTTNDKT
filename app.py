@@ -837,21 +837,27 @@ def process_frame(img):
             res = advanced_enhance(crop)
 
             # --- HIỂN THỊ DEBUG (Giữ nguyên theo ý bạn) ---
+            """
             with st.expander("🔍 Chi tiết xử lý vùng thẻ (Debug)"):
                 col_c1, col_c2 = st.columns(2)
                 col_c1.image(res["raw_resized"], caption="Ảnh Gốc")
                 col_c2.image(res["enhanced"], caption="Ảnh Enhanced")
-
+            """
             ocr_list = reader.readtext(res["enhanced"], detail=0)
+            
+            """
             with st.expander("📝 Nhật ký quét chữ (OCR Log)", expanded=False):
                 st.code(ocr_list)
-
+            """
+            
             raw_info = extract_student_info(ocr_list)
 
+            """
             with st.expander("📊 Chi tiết dữ liệu OCR trích xuất", expanded=True):
                 df_raw = pd.DataFrame(list(raw_info.items()), columns=["Trường thông tin", "Giá trị đọc được"])
                 st.table(df_raw)
-
+            """
+            
             # Chỉ thêm vào danh sách nếu quét được Mã SV hợp lệ
             if raw_info["Mã SV"] != "Không rõ":
                 results_data["students"].append(raw_info)
@@ -903,7 +909,7 @@ def process_frame(img):
             res_code, res_msg = check_gate_process(main_plate, mssv)
 
             if "SUCCESS" in res_code:
-                st.success(f"✅ {res_msg}")
+                
                 # Khi chạy trên Cloud, ta không lưu cv2.imwrite (vì Cloud sẽ xóa file)
                 # Thay vào đó, bạn có thể lưu link ảnh nếu dùng Cloud Storage (tùy chọn)
             else:
@@ -1024,26 +1030,28 @@ if source == "📁 Tải ảnh lên":
 else:
     st.info("💡 Hướng dẫn: Đưa Thẻ SV hoặc Biển số vào trước Camera.")
     
-    # Placeholder để hiển thị kết quả mà không gây rerun camera
-    res_placeholder = st.empty()
+    # Placeholder để cập nhật dữ liệu real-time
+    log_area = st.empty()
+    table_area = st.empty()
 
     ctx = webrtc_streamer(
         key="parking-ai",
         video_processor_factory=VideoProcessor,
-        rtc_configuration=RTC_CONFIG,
-        media_stream_constraints={
-            "video": {"width": 640, "height": 480},
-            "audio": False
-        },
-        async_processing=True, # Quan trọng để không bị treo
+        rtc_configuration=RTC_CONFIG, # Cấu hình nhiều STUN như tôi đã gửi
+        media_stream_constraints={"video": True, "audio": False},
+        async_processing=True, # Bắt buộc phải có
     )
 
-    # Hiển thị kết quả quét phía dưới camera
     if ctx.video_processor:
-        data_now = ctx.video_processor.last_data
-        if data_now:
-            with res_placeholder.container():
-                if data_now.get("plates"):
-                    st.success(f"📡 Biển số: {data_now['plates'][0]}")
-                if data_now.get("students"):
-                    st.table(data_now["students"])
+        data = ctx.video_processor.last_data
+        if data:
+            with log_area.container():
+                # Hiển thị các thông báo từ AI mà không gây Rerun
+                for log in data.get("logs", []):
+                    st.write(log)
+                if data["plates"]:
+                    st.success(f"✅ Biển số: {data['plates'][0]}")
+            
+            with table_area.container():
+                if data["students"]:
+                    st.table(data["students"])
