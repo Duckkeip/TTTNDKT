@@ -950,7 +950,10 @@ RTC_CONFIG = RTCConfiguration(
             {"urls": ["stun:stun2.l.google.com:19302"]},
             {"urls": ["stun:stun3.l.google.com:19302"]},
             {"urls": ["stun:stun4.l.google.com:19302"]},
-        ]
+            # Thêm server của Twilio hoặc Xirsys nếu bạn có (tùy chọn)
+            {"urls": ["stun:openrelay.metered.ca:80"]}, 
+        ],
+        "iceTransportPolicy": "all",
     }
 )
 
