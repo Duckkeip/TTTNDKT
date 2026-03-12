@@ -318,7 +318,7 @@ if menu == "📜 Lịch sử cá nhân":
 
     with tab2:
         if "checkout_url" not in st.session_state:
-        st.session_state.checkout_url = None
+            st.session_state.checkout_url = None
         
         st.subheader("Nạp tiền tự động qua QR (Ngân hàng)")
 
