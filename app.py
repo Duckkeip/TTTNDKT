@@ -943,18 +943,12 @@ class VideoProcessor(VideoTransformerBase):
 
 
 RTC_CONFIG = RTCConfiguration(
-    {
-        "iceServers": [
-            {"urls": ["stun:stun.l.google.com:19302"]},
-            {"urls": ["stun:stun1.l.google.com:19302"]},
-            {"urls": ["stun:stun2.l.google.com:19302"]},
-            {"urls": ["stun:stun3.l.google.com:19302"]},
-            {"urls": ["stun:stun4.l.google.com:19302"]},
-            # Thêm server của Twilio hoặc Xirsys nếu bạn có (tùy chọn)
-            {"urls": ["stun:openrelay.metered.ca:80"]}, 
-        ],
-        "iceTransportPolicy": "all",
-    }
+    {"iceServers": [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+        {"urls": ["stun:stun1.l.google.com:19302"]},
+        {"urls": ["stun:stun2.l.google.com:19302"]},
+        {"urls": ["stun:stun.services.mozilla.com"]}
+    ]}
 )
 
 # ==========================================
@@ -1029,29 +1023,27 @@ if source == "📁 Tải ảnh lên":
 # --- TRƯỜNG HỢP 2: DÙNG CAMERA (WEBRTC) ---
 else:
     st.info("💡 Hướng dẫn: Đưa Thẻ SV hoặc Biển số vào trước Camera.")
+    
+    # Placeholder để hiển thị kết quả mà không gây rerun camera
+    res_placeholder = st.empty()
 
-    # 1. Khởi tạo vùng chứa trống (Placeholder) ngoài camera để tránh Rerun
-    status_placeholder = st.empty()
-    table_placeholder = st.empty()
-
-    # 2. Cấu hình WebRTC (Đảm bảo RTC_CONFIG đã thêm nhiều STUN server như tôi hướng dẫn trước đó)
     ctx = webrtc_streamer(
         key="parking-ai",
         video_processor_factory=VideoProcessor,
         rtc_configuration=RTC_CONFIG,
-        media_stream_constraints={"video": True, "audio": False},
-        async_processing=True, # Thêm dòng này để xử lý mượt hơn
+        media_stream_constraints={
+            "video": {"width": 640, "height": 480},
+            "audio": False
+        },
+        async_processing=True, # Quan trọng để không bị treo
     )
 
-    # 3. CHỈ cập nhật dữ liệu vào Placeholder
+    # Hiển thị kết quả quét phía dưới camera
     if ctx.video_processor:
         data_now = ctx.video_processor.last_data
         if data_now:
-            with status_placeholder.container(): # Dùng container để bọc các thông báo
+            with res_placeholder.container():
                 if data_now.get("plates"):
-                    st.success(f"📡 Phát hiện biển số: {data_now['plates'][0]}")
-                
-            with table_placeholder.container():
+                    st.success(f"📡 Biển số: {data_now['plates'][0]}")
                 if data_now.get("students"):
-                    st.write("📋 Thông tin sinh viên:")
                     st.table(data_now["students"])
