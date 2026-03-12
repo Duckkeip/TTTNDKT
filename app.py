@@ -336,7 +336,7 @@ if menu == "📜 Lịch sử cá nhân":
                         description=f"NAPTIEN {user['student_id']}"[:25],
                         returnUrl="https://vaagate.streamlit.app/?payment=success",
                         cancelUrl="https://vaagate.streamlit.app/?payment=cancel",
-                        expiresAt=expire_time
+                        expiredAt=expire_time
                     )
 
                     # API mới của PayOS
