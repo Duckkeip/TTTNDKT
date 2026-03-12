@@ -353,11 +353,18 @@ if menu == "📜 Lịch sử cá nhân":
                         "time": datetime.now(vn_tz)
                     })
                     
+                    st.session_state.checkout_url = pay_link.checkout_url
                     st.success("✅ Đã tạo mã thanh toán!")
-                    st.markdown(f"**Vui lòng quét mã QR bên dưới để hoàn tất:**")
-                    st.components.v1.iframe(st.session_state.checkout_url, height=700, scrolling=True)
                 except Exception as e:
                     st.error(f"❌ Lỗi: {str(e)}")
+        if st.session_state.checkout_url:
+        st.markdown(f"**Vui lòng quét mã QR bên dưới để hoàn tất:**")
+        st.components.v1.iframe(st.session_state.checkout_url, height=700, scrolling=True)
+        
+        # Thêm nút để ẩn mã QR nếu khách hàng muốn hủy
+        if st.button("Hủy/Đóng mã QR này"):
+            st.session_state.checkout_url = None
+            st.rerun()
             
 # --- NỘI DUNG CHO ADMIN: THỐNG KÊ ---
 if menu == "📊 Thống kê hệ thống":
