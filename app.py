@@ -304,7 +304,7 @@ else:
 # Nếu là User bình thường, dừng các logic quét ở dưới và chỉ hiện lịch sử
 if menu == "📜 Lịch sử cá nhân":
     st.title("📜 Lịch sử cá nhân")
-
+    
     # Tab hiển thị: 1 bên là Lịch sử ra vào, 1 bên là Nạp tiền
     tab1, tab2 = st.tabs(["🚗 Lịch sử ra vào", "💳 Nạp tiền vào ví"])
 
@@ -317,6 +317,8 @@ if menu == "📜 Lịch sử cá nhân":
             st.info("Chưa có lịch sử ra vào.")
 
     with tab2:
+        if "checkout_url" not in st.session_state:
+        st.session_state.checkout_url = None
         
         st.subheader("Nạp tiền tự động qua QR (Ngân hàng)")
 
