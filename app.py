@@ -12,6 +12,7 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
 from services.auth_service import auth_ui
+from streamlit_autorefresh import st_autorefresh
 
 load_dotenv()
 from payos import PayOS
@@ -313,7 +314,7 @@ if menu == "📜 Lịch sử cá nhân":
             st.info("Chưa có lịch sử ra vào.")
 
     with tab2:
-        st.autorefresh(interval=7000)
+        st_autorefresh(interval=7000, key="datarefresh")
         st.subheader("Nạp tiền tự động qua QR (Ngân hàng)")
 
         with st.form("payment_form"):
