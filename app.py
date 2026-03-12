@@ -1030,18 +1030,28 @@ if source == "📁 Tải ảnh lên":
 else:
     st.info("💡 Hướng dẫn: Đưa Thẻ SV hoặc Biển số vào trước Camera.")
 
+    # 1. Khởi tạo vùng chứa trống (Placeholder) ngoài camera để tránh Rerun
+    status_placeholder = st.empty()
+    table_placeholder = st.empty()
+
+    # 2. Cấu hình WebRTC (Đảm bảo RTC_CONFIG đã thêm nhiều STUN server như tôi hướng dẫn trước đó)
     ctx = webrtc_streamer(
         key="parking-ai",
         video_processor_factory=VideoProcessor,
         rtc_configuration=RTC_CONFIG,
         media_stream_constraints={"video": True, "audio": False},
+        async_processing=True, # Thêm dòng này để xử lý mượt hơn
     )
 
+    # 3. CHỈ cập nhật dữ liệu vào Placeholder
     if ctx.video_processor:
-        if st.checkbox("Hiển thị nhật ký quét thời gian thực"):
-            data_now = ctx.video_processor.last_data
-            if data_now:
-                if data_now["plates"]:
-                    st.success(f"📡 Biển số: {data_now['plates'][0]}")
-                if data_now["students"]:
+        data_now = ctx.video_processor.last_data
+        if data_now:
+            with status_placeholder.container(): # Dùng container để bọc các thông báo
+                if data_now.get("plates"):
+                    st.success(f"📡 Phát hiện biển số: {data_now['plates'][0]}")
+                
+            with table_placeholder.container():
+                if data_now.get("students"):
+                    st.write("📋 Thông tin sinh viên:")
                     st.table(data_now["students"])
