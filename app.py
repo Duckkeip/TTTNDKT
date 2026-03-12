@@ -909,7 +909,7 @@ def process_frame(img):
             res_code, res_msg = check_gate_process(main_plate, mssv)
 
             if "SUCCESS" in res_code:
-                
+                st.success(f"✅ {res_msg}")
                 # Khi chạy trên Cloud, ta không lưu cv2.imwrite (vì Cloud sẽ xóa file)
                 # Thay vào đó, bạn có thể lưu link ảnh nếu dùng Cloud Storage (tùy chọn)
             else:
