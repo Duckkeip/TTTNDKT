@@ -307,6 +307,7 @@ if menu == "📜 Lịch sử cá nhân":
     tab1, tab2 = st.tabs(["🚗 Lịch sử ra vào", "💳 Nạp tiền vào ví"])
 
     with tab1:
+        st_autorefresh(interval=7000, key="datarefresh")
         my_logs = list(logs_col.find({"student_id": user["student_id"]}).sort("time", -1))
         if my_logs:
             st.dataframe(pd.DataFrame(my_logs).drop(columns=["_id"]), use_container_width=True)
@@ -314,7 +315,7 @@ if menu == "📜 Lịch sử cá nhân":
             st.info("Chưa có lịch sử ra vào.")
 
     with tab2:
-        st_autorefresh(interval=7000, key="datarefresh")
+        
         st.subheader("Nạp tiền tự động qua QR (Ngân hàng)")
 
         with st.form("payment_form"):
