@@ -308,7 +308,7 @@ if menu == "📜 Lịch sử cá nhân":
     tab1, tab2 = st.tabs(["🚗 Lịch sử ra vào", "💳 Nạp tiền vào ví"])
 
     with tab1:
-        st_autorefresh(interval=10000, key="datarefresh")
+        
         my_logs = list(logs_col.find({"student_id": user["student_id"]}).sort("time", -1))
         if my_logs:
             st.dataframe(pd.DataFrame(my_logs).drop(columns=["_id"]), use_container_width=True)
@@ -326,7 +326,7 @@ if menu == "📜 Lịch sử cá nhân":
                 try:
                     order_code = int(datetime.now().timestamp() * 1000)
                     final_amount = int(amount)
-                    expire_time = int(time.time() + 600)
+                    
                     
 
                     payment_data = CreatePaymentLinkRequest(
@@ -335,7 +335,7 @@ if menu == "📜 Lịch sử cá nhân":
                         description=f"NAPTIEN {user['student_id']}"[:25],
                         returnUrl="https://vaagate.streamlit.app/?payment=success",
                         cancelUrl="https://vaagate.streamlit.app/?payment=cancel",
-                        expiresAt=expire_time
+                        
                     )
 
                     # API mới của PayOS
@@ -351,7 +351,7 @@ if menu == "📜 Lịch sử cá nhân":
                         "status": "PENDING",
                         "time": datetime.now(vn_tz)
                     })
-                    st.session_state.checkout_url = pay_link.checkout_url
+                    
                     st.success("✅ Đã tạo mã thanh toán!")
                 except Exception as e:
                     st.error(f"❌ Lỗi: {str(e)}")
