@@ -920,30 +920,25 @@ def process_frame(img):
     return display_img, results_data
 
 
-# Tạo một lớp để xử lý luồng Video
-class VideoProcessor(VideoTransformerBase):
-    def transform(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-
-        # Gọi hàm xử lý AI của bạn
-        res_img, data = process_frame(img)
-
-        # Trả về khung hình đã được vẽ khung nhận diện
-        return res_img
-
-
-# ==========================================
-# 4. CẤU CẤU HÌNH WEBRTC (Đưa ra ngoài để tối ưu)
-# ==========================================
+# --- LỚP XỬ LÝ VIDEO DUY NHẤT ---
 class VideoProcessor(VideoTransformerBase):
     def __init__(self):
+        # Khởi tạo biến để lưu kết quả quét mới nhất
         self.last_data = None
 
     def transform(self, frame):
+        # 1. Chuyển frame từ WebRTC sang mảng Numpy (BGR cho OpenCV)
         img = frame.to_ndarray(format="bgr24")
-        # Gọi hàm xử lý AI
+
+        # 2. Gọi hàm xử lý AI đã định nghĩa ở trên
+        # res_img: Ảnh đã vẽ khung, data: Kết quả OCR/Biển số
         res_img, data = process_frame(img)
+
+        # 3. Lưu data vào biến tạm để hiển thị nhật ký ngoài màn hình
         self.last_data = data
+
+        # 4. QUAN TRỌNG: Chuyển từ BGR (OpenCV) sang RGB (Trình duyệt) 
+        # Nếu không có dòng này, mặt người/xe sẽ bị ám xanh dương
         return cv2.cvtColor(res_img, cv2.COLOR_BGR2RGB)
 
 
