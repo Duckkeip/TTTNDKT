@@ -58,11 +58,22 @@ TTTNDKT/
     CheckIn --> SaveIN[(Ghi log vào MongoDB: IN)]
     CheckOut --> Balance{Kiểm tra số dư}
     
-    Balance -->|Không đủ tiền| Error2[Yêu cầu nạp tiền qua PayOS]
-    Balance -->|Đủ tiền| Pay[Trừ tiền & Ghi log: OUT]
+    %% Luồng Nạp tiền & Gmail 1
+    Balance -->|Không| PayOS[Nạp tiền PayOS]
+    PayOS --> Mail1[Gmail: Xác nhận nạp tiền]
+    Mail1 --> Balance
     
-    SaveIN --> End([Mở cổng - Hoàn tất])
-    Pay --> End
+    %% Luồng Trừ tiền & Gmail 2
+    Balance -->|Có| Pay[Trừ tiền & Ghi log vào MongoDB: OUT]
+    Pay --> Mail2[Gmail: Thông báo biến động số dư]
+    
+    SaveIN --> End([Hoàn tất])
+    Mail2 --> End
+    
+    %% Định dạng màu sắc cho nổi bật
+    style Mail1 fill:#brown,stroke:#333,stroke-width:2px
+    style Mail2 fill:#gray,stroke:#333,stroke-width:2px
+    style PayOS fill:#blue,stroke:#333,stroke-width:2px
 ```
 
 
