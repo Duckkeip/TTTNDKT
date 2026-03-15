@@ -55,7 +55,7 @@ TTTNDKT/
     Mode -->|Xe đang ở Ngoài| CheckIn[Lệnh: Cho xe VÀO]
     Mode -->|Xe đang ở Trong| CheckOut[Lệnh: Cho xe RA]
     
-    CheckIn --> SaveIN[((Ghi log vào MongoDB: IN))]
+    CheckIn --> SaveIN[(Ghi log vào MongoDB: IN)]
     CheckOut --> Balance{Kiểm tra số dư}
     
     %% Luồng Nạp tiền & Gmail 1
