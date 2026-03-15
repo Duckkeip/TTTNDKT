@@ -40,4 +40,30 @@ TTTNDKT/
 ├── README.md             # Hướng dẫn dự án
 └── .env                  # Lưu biến môi trường MONGO_URI (Không push public)
 ```
+## WORKFLOW
+```mermaid
+    flowchart TD
+    Start([Bắt đầu quét]) --> Input[Camera quét Thẻ & Biển số]
+    Input --> AI_Proc{AI Xử lý - YOLO + OCR}
+    
+    AI_Proc -->|Thất bại| Retry[Yêu cầu quét lại]
+    AI_Proc -->|Thành công| DB_Check{Kiểm tra Database}
+    
+    DB_Check -->|MSSV không tồn tại| Error1[Báo lỗi: SV chưa đăng ký]
+    DB_Check -->|MSSV Hợp lệ| Mode{Kiểm tra trạng thái xe}
+    
+    Mode -->|Xe đang ở Ngoài| CheckIn[Lệnh: Cho xe VÀO]
+    Mode -->|Xe đang ở Trong| CheckOut[Lệnh: Cho xe RA]
+    
+    CheckIn --> SaveIN[(Ghi log vào MongoDB: IN)]
+    CheckOut --> Balance{Kiểm tra số dư}
+    
+    Balance -->|Không đủ tiền| Error2[Yêu cầu nạp tiền qua PayOS]
+    Balance -->|Đủ tiền| Pay[Trừ tiền & Ghi log: OUT]
+    
+    SaveIN --> End([Mở cổng - Hoàn tất])
+    Pay --> End
+```
+
+
 ### HOST tại: **[https://vaagate.streamlit.app/](https://vaagate.streamlit.app/)**
