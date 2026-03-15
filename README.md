@@ -42,7 +42,7 @@ TTTNDKT/
 ```
 ## WORKFLOW
 ```mermaid
-    flowchart LR
+    flowchart TD
     Start([Bắt đầu quét]) --> Input[Camera quét Thẻ & Biển số]
     Input --> AI_Proc{AI Xử lý - YOLO + OCR}
     
@@ -71,9 +71,9 @@ TTTNDKT/
     Mail2 --> End
     
     %% Định dạng màu sắc cho nổi bật
-    style Mail1 fill:#f9f,stroke:#333,stroke-width:2px
-    style Mail2 fill:#bbf,stroke:#333,stroke-width:2px
-    style PayOS fill:#dfd,stroke:#333,stroke-width:2px
+    style Mail1 fill:#brown,stroke:#333,stroke-width:2px
+    style Mail2 fill:#gray,stroke:#333,stroke-width:2px
+    style PayOS fill:#blue,stroke:#333,stroke-width:2px
 ```
 
 
