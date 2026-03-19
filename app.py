@@ -1,5 +1,7 @@
 import pandas as pd
 import streamlit as st
+import smtplib
+
 import cv2
 import numpy as np
 import re
@@ -13,9 +15,9 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
 from services.auth_service import auth_ui
-from streamlit_autorefresh import st_autorefresh
 
 load_dotenv()
+#PAYOS
 from payos import PayOS
 from payos.types import CreatePaymentLinkRequest
 import pytz
@@ -67,6 +69,9 @@ def init_db():
     except Exception as e:
         st.error(f"❌ Lỗi kết nối MongoDB: {e}")
         st.stop()
+
+
+
 # QUAN TRỌNG: Gán biến ở đây để các hàm khác như get_student_from_db có thể dùng được
 students_col, logs_col, alerts_col = init_db()
 db = students_col.database
@@ -164,6 +169,25 @@ with st.expander("📜 Lịch sử giao dịch", expanded=True):
                             )
 
                             if result.modified_count > 0:
+                                # 2. Lấy dữ liệu mới nhất (bao gồm số dư mới và email) để gửi thông báo
+                                updated_user = users_collection.find_one({"student_id": user['student_id']})
+                                new_balance = updated_user.get("balance", 0)
+                                user_email = updated_user.get("email")
+
+                                from utils.email_service import send_custom_email, get_transaction_template
+                                # 3. Gửi Email thông báo qua PayOS
+                                if user_email:
+                                    html_body = get_transaction_template(
+                                        user_name=updated_user.get("full_name", "Sinh viên"),
+                                        amount=int(order["amount"]),
+                                        balance=new_balance
+                                    )
+                                    send_custom_email(
+                                        receiver_email=user_email,
+                                        subject="[VAA Parking] Xác nhận nạp tiền thành công (PayOS)",
+                                        html_content=html_body
+                                    )
+
                                 db["recharge_logs"].update_one(
                                     {"orderCode": order["orderCode"]},
                                     {"$set": {"status": "PAID"}}
@@ -290,7 +314,7 @@ if user.get("role") == "admin":
 else:
     menu = "📜 Lịch sử cá nhân"
     # Nút đăng xuất
-    if st.sidebar.button("🚪 Đăng xuất"):
+if st.sidebar.button("🚪 Đăng xuất"):
         # Xóa trạng thái đăng nhập
         st.session_state.logged_in = False
         st.session_state.user_info = None
@@ -370,38 +394,125 @@ if menu == "📜 Lịch sử cá nhân":
             
 # --- NỘI DUNG CHO ADMIN: THỐNG KÊ ---
 if menu == "📊 Thống kê hệ thống":
-    st.title("📊 Báo cáo & Thống kê")
+    st.title("📊 Báo cáo & Thống kê Chuyên sâu")
 
-    col1, col2, col3 = st.columns(3)
+    # --- PHẦN 1: BỘ LỌC (FILTERS) ---
+    with st.expander("🔍 Bộ lọc tìm kiếm", expanded=True):
+        col_f1, col_f2, col_f3 = st.columns(3)
+        with col_f1:
+            search_mssv = st.text_input("Mã số sinh viên", placeholder="Nhập MSSV...")
+        with col_f2:
+            search_plate = st.text_input("Biển số xe", placeholder="Nhập biển số...")
+        with col_f3:
+            filter_status = st.selectbox("Trạng thái", ["Tất cả", "IN", "OUT"])
 
-    total_logs = logs_col.count_documents({})
-    total_alerts = alerts_col.count_documents({})
+    # Xây dựng query cho MongoDB dựa trên bộ lọc
+    query = {}
+    if search_mssv:
+        # Sửa từ "mssv" thành "student_id"
+        query["student_id"] = {"$regex": search_mssv, "$options": "i"}
+    if search_plate:
+        # Sửa từ "plate" thành "plate_detected"
+        query["plate_detected"] = {"$regex": search_plate, "$options": "i"}
+    if filter_status != "Tất cả":
+        query["status"] = filter_status
 
+    # Lấy dữ liệu đã lọc
+    filtered_logs = list(logs_col.find(query).sort("time", -1))
+    df = pd.DataFrame(filtered_logs)
+
+    # --- PHẦN 2: METRICS (THỐNG KÊ NHANH) ---
+    col1, col2, col3, col4 = st.columns(4)
+
+    total_logs = len(df) if not df.empty else 0
+
+    # Tính số xe đang trong bãi (Logic: bản ghi cuối cùng của mỗi biển số là 'IN')
     pipeline = [
         {"$sort": {"time": -1}},
-        {
-            "$group": {
-                "_id": "$plate",
-                "last_status": {"$first": "$status"}
-            }
-        },
+        {"$group": {"_id": "$plate", "last_status": {"$first": "$status"}}},
         {"$match": {"last_status": "IN"}}
     ]
-
     vehicles_inside = len(list(logs_col.aggregate(pipeline)))
 
-    col1.metric("Tổng lượt xe", f"{total_logs} lượt")
-    col2.metric("Xe đang trong bãi", f"{vehicles_inside} xe")
-    col3.metric("Cảnh báo vi phạm", f"{total_alerts} vụ", delta_color="inverse")
+    # Tính doanh thu từ các bản ghi đã lọc
+    total_revenue = df['fee'].sum() if not df.empty and 'fee' in df.columns else 0
 
-    st.subheader("📝 Nhật ký ra vào mới nhất")
+    col1.metric("Tổng lượt (Lọc)", f"{total_logs}")
+    col2.metric("Xe trong bãi", f"{vehicles_inside}")
+    col3.metric("Doanh thu (Lọc)", f"{total_revenue:,.0f}đ")
+    col4.metric("Cảnh báo", f"{alerts_col.count_documents({})}")
 
-    all_logs = list(logs_col.find().sort("time", -1).limit(50))
-    if all_logs:
-        df = pd.DataFrame(all_logs)
+    # --- PHẦN 3: BIỂU ĐỒ (VISUALIZATION) ---
+    if not df.empty:
+        st.subheader("📈 Biểu đồ lưu lượng")
         df["time"] = pd.to_datetime(df["time"]).dt.tz_localize("UTC").dt.tz_convert("Asia/Ho_Chi_Minh")
-        df["time"] = df["time"].dt.strftime("%d-%m-%Y %H:%M:%S")
-        st.dataframe(df.drop(columns=["_id"]))
+
+        # Biểu đồ đường theo giờ/ngày
+        df['hour'] = df['time'].dt.hour
+        hourly_counts = df.groupby(['hour', 'status']).size().unstack(fill_value=0)
+        st.area_chart(hourly_counts)
+
+    # --- PHẦN 4: BẢNG DỮ LIỆU ---
+    st.subheader("📝 Nhật ký chi tiết")
+
+    if not df.empty:
+        # 1. Tạo bản sao để xử lý hiển thị
+        df_display = df.copy()
+
+        # 2. Xử lý thời gian (Chuyển từ UTC sang Giờ Việt Nam)
+        if "time" in df_display.columns:
+            df_display["time"] = pd.to_datetime(df_display["time"]).dt.tz_convert("Asia/Ho_Chi_Minh")
+            df_display["time"] = df_display["time"].dt.strftime("%d-%m-%Y %H:%M:%S")
+        if "fee_charged" in df_display.columns:
+            # Chuyển về số (đề phòng dữ liệu dạng chuỗi) và định dạng 1,000 VNĐ
+            df_display["fee_charged"] = df_display["fee_charged"].apply(
+                lambda x: f"{x:,.0f} VNĐ" if pd.notnull(x) else "0 VNĐ")
+        # 3. Chọn đúng các cột đang có trong DB của bạn
+        # Dựa theo ảnh: student_id, student_name, plate_detected, status, fee_charged
+        cols_to_show = ["time", "student_id", "student_name", "plate_detected", "status", "fee_charged"]
+
+        # Chỉ lấy những cột thực sự tồn tại để tránh lỗi crash
+        existing_cols = [c for c in cols_to_show if c in df_display.columns]
+        df_final = df_display[existing_cols]
+
+        # 4. Đổi tên tiêu đề cột cho chuyên nghiệp (Viết tiếng Việt có dấu)
+        rename_map = {
+            "time": "THỜI GIAN",
+            "student_id": "MSSV",
+            "student_name": "HỌ TÊN",
+            "plate_detected": "BIỂN SỐ",
+            "status": "TRẠNG THÁI",
+            "fee_charged": "PHÍ (VNĐ)"
+        }
+        df_final = df_final.rename(columns=rename_map)
+
+
+        # 5. Định dạng màu sắc dựa trên cột TRẠNG THÁI
+        def style_status(val):
+            if val == "IN":
+                return "background-color: #d4edda; color: #155724; font-weight: bold;"
+            elif val == "OUT":
+                return "background-color: #f8d7da; color: #721c24; font-weight: bold;"
+            return ""
+
+
+        # 6. Hiển thị bảng lên Streamlit
+        st.dataframe(
+            df_final.style.applymap(style_status, subset=["TRẠNG THÁI"] if "TRẠNG THÁI" in df_final.columns else []),
+            use_container_width=True,
+            hide_index=True
+        )
+
+        # 7. Nút xuất file (Giữ nguyên MSSV và Biển số trong file CSV)
+        csv = df_display.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📥 Tải báo cáo chi tiết (MSSV & Biển số)",
+            data=csv,
+            file_name=f"nhat_ky_xe_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("Không tìm thấy dữ liệu phù hợp với bộ lọc (MSSV hoặc Biển số).")
 #ADMIN: Quản lý Users
 if menu == "👥 Quản lý người dùng":
     st.header("💰 Quản lý Ngân khố & Người dùng")
@@ -421,12 +532,29 @@ if menu == "👥 Quản lý người dùng":
                 # Kiểm tra user có tồn tại không
                 target_user = db["users"].find_one({"student_id": target_mssv})
                 if target_user:
+                    print(f">>> Đang nạp tiền cho: {target_mssv}")
                     # Lệnh $inc để cộng dồn tiền vào balance
                     db["users"].update_one(
                         {"student_id": target_mssv},
                         {"$inc": {"balance": amount}}
                     )
-                    # Ghi lại lịch sử nạp tiền vào collection giao dịch (tùy chọn)
+                    # 2. Lấy số dư mới và gửi mail ngay lập tức
+                    new_balance = target_user.get("balance", 0) + amount
+                    user_email = target_user.get("email")
+                    print(f">>> Email tìm thấy: {user_email}")
+                    if user_email:
+                        from utils.email_service import send_custom_email, get_transaction_template
+
+                        html_body = get_transaction_template(target_user['full_name'], amount, new_balance)
+
+                        print(">>> Bắt đầu gọi hàm gửi mail...")  # Log 3
+                        success = send_custom_email(user_email, "[VAA] Nạp tiền", html_body)
+
+                        if success:
+                            print(">>> GỬI MAIL THÀNH CÔNG!")
+                        else:
+                            print(">>> GỬI MAIL THẤT BẠI - Kiểm tra cấu hình Gmail!")
+
                     st.success(f"✅ Đã nạp {amount:,} VNĐ cho SV {target_user['full_name']}")
                     st.balloons()
                 else:
@@ -692,6 +820,29 @@ def check_gate_process(plate_detected, mssv_ocr):
     if not user_data:
         return "ERROR", f"Tài khoản {mssv_ocr} không tồn tại trên hệ thống!"
 
+    current_balance = user_data.get("balance", 0)
+    low_balance_threshold = 10000  # Ngưỡng cảnh báo: 10,000 VNĐ
+    days_between_warnings = 3  # Khoảng cách giữa các lần thông báo: 3 ngày
+
+    if current_balance < low_balance_threshold:
+        last_sent = user_data.get("last_warning_sent")
+
+        # Kiểm tra nếu chưa bao giờ gửi hoặc đã quá số ngày quy định
+        if not last_sent or (now - last_sent.replace(tzinfo=vn_tz)).days >= days_between_warnings:
+            from utils.email_service import send_custom_email, get_low_balance_template
+
+            user_email = user_data.get("email")
+            if user_email:
+                html_warn = get_low_balance_template(user_data['full_name'], current_balance)
+                sent = send_custom_email(user_email, "[VAA Parking] Cảnh báo số dư tài khoản thấp", html_warn)
+
+                if sent:
+                    # Cập nhật lại mốc thời gian đã gửi vào Database
+                    users_col.update_one(
+                        {"student_id": mssv_ocr},
+                        {"$set": {"last_warning_sent": now}}
+                    )
+
     # 2. Xác định phí (Cán bộ miễn phí, Sinh viên 3000đ)
     is_staff = (user_data.get("user_type") == "staff")
     fee = 0 if is_staff else 3000
@@ -823,6 +974,7 @@ def process_frame(img):
             cv2.putText(display_img, fixed_plate, (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
+
     # --- 2. NHẬN DIỆN THẺ SINH VIÊN ---
     sv_results = yolo_sv.predict(img, conf=0.5, verbose=False)[0]
     for box in sv_results.boxes:
@@ -841,18 +993,18 @@ def process_frame(img):
                     results_data["mssv_status"] = "OK" if student_db else "NOT_FOUND"
                 cv2.rectangle(display_img, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
-    return display_img, results_data
-    # --- 3. LOGIC KẾT HỢP (PAIRING): CHỈ XỬ LÝ KHI CÓ ĐỦ 2 ĐIỀU KIỆN ---
+
+    # --- 3. LOGIC XỬ LÝ VÀO RA (Đã xóa return chặn ở trên) ---
     if results_data["students"] and results_data["plates"]:
         # Lấy dữ liệu đầu tiên tìm thấy
         main_student = results_data["students"][0]
         main_plate = results_data["plates"][0]
         mssv = main_student["Mã SV"]
-
-        # A. Lấy thông tin chuẩn từ Database
         student_db = get_student_from_db(mssv)
 
         if student_db:
+            now = datetime.now(vn_tz)
+            last_time = st.session_state.last_scan_time.get(mssv)
             # --- HIỂN THỊ BẢNG ĐỐI CHIẾU ---
             st.markdown("### 📊 Log đối chiếu: OCR vs Database")
             with st.container():
