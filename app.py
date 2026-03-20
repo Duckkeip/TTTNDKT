@@ -108,6 +108,7 @@ if "verify_token" in query_params:
 
         # LOG 3: Kiểm tra kết quả ghi vào Database
         if result.modified_count > 0:
+            st.query_params.clear()
             st.success("🚀 Database đã cập nhật thành công (is_active: True)!")
             st.balloons()
 
