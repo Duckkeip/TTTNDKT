@@ -39,6 +39,11 @@ if 'pair_data' not in st.session_state:
 SCAN_COOLDOWN = 4
 if "last_scan_time" not in st.session_state:
     st.session_state.last_scan_time = {}
+
+
+
+
+
 @st.cache_resource
 def init_db():
     uri = None
@@ -65,16 +70,65 @@ def init_db():
     try:
         client = MongoClient(uri)
         db = client["TN"]
-        return db["students"], db["gate_logs"], db["alerts"]
+        return db["students"], db["gate_logs"], db["alerts"] ,db["recharge_logs"],db["users"]
     except Exception as e:
         st.error(f"❌ Lỗi kết nối MongoDB: {e}")
         st.stop()
+students_col, logs_col, alerts_col, recharge_col, users_col = init_db()
+db = students_col.database # Bây giờ biến 'db' mới chính thức tồn tại
+print(">>> ĐÃ KẾT NỐI DB THÀNH CÔNG, ĐANG QUÉT TOKEN...")
+# --- BƯỚC 2: XỬ LÝ KÍCH HOẠT VỚI LOG CHI TIẾT ---
+query_params = st.query_params
 
+if "verify_token" in query_params:
+    token = query_params["verify_token"]
 
+    # LOG 1: Kiểm tra xem có bắt được Token từ URL không
+    st.info(f"🔍 Đang kiểm tra Token từ Email: `{token}`")
 
-# QUAN TRỌNG: Gán biến ở đây để các hàm khác như get_student_from_db có thể dùng được
-students_col, logs_col, alerts_col = init_db()
-db = students_col.database
+    # 1. Chỉ định bảng xử lý
+    target_col = users_col  # Dùng luôn biến users_col đã nhận ở trên
+
+    # 2. Tìm User
+    user_to_verify = target_col.find_one({"verification_token": token})
+
+    if user_to_verify:
+        # LOG 2: Tìm thấy User khớp với Token
+        st.write(f"✅ Đã tìm thấy tài khoản: **{user_to_verify.get('username')}**")
+        st.write(f"📊 Trạng thái hiện tại (is_active): `{user_to_verify.get('is_active')}`")
+
+        # 3. Thực hiện cập nhật
+        result = target_col.update_one(
+            {"_id": user_to_verify["_id"]},
+            {
+                "$set": {"is_active": True},
+                "$unset": {"verification_token": ""}
+            }
+        )
+
+        # LOG 3: Kiểm tra kết quả ghi vào Database
+        if result.modified_count > 0:
+            st.success("🚀 Database đã cập nhật thành công (is_active: True)!")
+            st.balloons()
+
+            # window.location.origin sẽ tự lấy https://vaagate.streamlit.app
+            # hoặc http://localhost:8501 tùy theo nơi bạn đang đứng
+            st.components.v1.html(f"""
+                    <script>
+                        setTimeout(function(){{
+                            window.location.href = window.location.origin; 
+                        }}, 3000);
+                    </script>
+                """, height=0)
+            st.stop()
+        else:
+            st.warning("⚠️ Lệnh Update đã chạy nhưng không có hàng nào bị thay đổi (Có thể is_active đã True sẵn).")
+    else:
+        # LOG 4: Không tìm thấy User
+        st.error("❌ Không tìm thấy User nào có mã xác thực này trong bảng 'users'.")
+        # Log thêm để bạn kiểm tra xem mình có lưu nhầm bảng khác không
+        st.write("💡 Mẹo: Hãy kiểm tra MongoDB Compass xem Token này nằm ở bảng 'users' hay 'students'.")
+
 
 # Khởi tạo các biến session cần thiết
 if 'logged_in' not in st.session_state:
