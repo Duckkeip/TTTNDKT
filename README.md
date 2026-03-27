@@ -75,6 +75,41 @@ TTTNDKT/
     style Mail2 fill:#gray,stroke:#333,stroke-width:2px
     style PayOS fill:#blue,stroke:#333,stroke-width:2px
 ```
+```mermaid
+sequenceDiagram
+    actor Admin
+    participant Web
+    participant AI as Model AI (YOLOv8)
+    participant Server
+    participant DB as Database
 
+    Admin->>Web: Chụp ảnh/Upload ảnh thủ công
+    Web->>AI: Gửi hình ảnh xử lý
+    
+    AI->>AI: Kiểm tra & Nhận diện (YOLOv8/EasyOCR)
+    AI-->>Server: Trả về kết quả (Mã SV & Biển số)
 
+    Server->>DB: Truy vấn thông tin đăng ký
+    DB-->>Server: Kết quả đối chiếu
+    
+    Server->>Server: Kiểm tra tính hợp lệ (Lỗi dữ liệu?)
+    
+    alt Có lỗi dữ liệu (Lệch thông tin)
+        Server->>DB: Lưu vào bảng Cảnh báo (Alerts)
+        Server-->>Web: Gửi thông báo sai lệch
+    else Dữ liệu khớp (Hợp lệ)
+        Server->>Server: Kiểm tra trạng thái xe (IN/OUT)
+        
+        alt Trạng thái "IN" (Xe vào)
+            Server->>DB: Cập nhật thông tin xe vào
+        else Trạng thái "OUT" (Xe ra)
+            Server->>DB: Cập nhật Database & Tính phí gửi xe
+            Note right of Server: Tính 3000đ/lượt (Cộng thêm phí qua đêm nếu có)
+        end
+        
+        Server-->>Web: Trả về thông tin sinh viên & Trạng thái
+    end
+
+    Web-->>Admin: Hiển thị kết quả lên màn hình
+```
 ### HOST tại: **[https://vaagate.streamlit.app/](https://vaagate.streamlit.app/)**
