@@ -77,25 +77,36 @@ TTTNDKT/
 ```
 ```mermaid
 sequenceDiagram
-    actor User
+    actor Admin
     participant Web
-    participant Server
+    participant DB as Database
 
-    User->>Web: Đăng nhập vào trang chủ
-    Web->>Web: Lấy session đăng nhập
+    Admin->>Web: Đăng nhập
+    Web->>Web: Lưu session
     
-    User->>Web: Chọn lịch sử ra vào
-    Web->>Server: Truy vấn thông tin theo tài khoản đã đăng nhập
-    
-    Server->>Server: Kiểm tra dữ liệu (DecisionNode)
-    
-    alt Có dữ liệu
-        Server-->>Web: Trả về danh sách lịch sử
-        Web->>Web: Hiển thị thời gian mới nhất lên đầu bảng
-        Web-->>User: Nhận thông tin ra vào của sinh viên
-    else Không có dữ liệu
-        Server-->>Web: Trả về trạng thái trống
-        Web-->>User: Thông báo chưa có dữ liệu ra vào
+    rect rgb(240, 240, 240)
+    Note over Admin, Web: Luồng nhập thông tin
+    Admin->>Web: Chọn tài khoản nạp tiền
+    Admin->>Web: Nhập thông tin nạp tiền
+    end
+
+    alt Admin nhấn Hủy
+        Admin->>Web: Hủy giao dịch
+        Web-->>Admin: Quay lại bước chọn tài khoản
+    else Admin nhấn Xác nhận
+        Admin->>Web: Xác nhận nạp tiền
+        Web->>DB: Thay đổi số dư & Lưu vào cơ sở dữ liệu
+        
+        DB-->>Web: Phản hồi kết quả (Thành công/Lỗi)
+        
+        alt Lưu thất bại
+            Web-->>Admin: Thông báo lỗi
+            Web-->>Admin: Quay lại bước chọn tài khoản
+        else Lưu thành công
+            Web-->>Admin: Thông báo thành công
+            Web->>DB: Thêm vào lịch sử giao dịch
+            Web-->>Admin: Hoàn tất (Kết thúc)
+        end
     end
 ```
 ### HOST tại: **[https://vaagate.streamlit.app/](https://vaagate.streamlit.app/)**
