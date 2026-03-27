@@ -75,7 +75,7 @@ TTTNDKT/
     style Mail2 fill:#gray,stroke:#333,stroke-width:2px
     style PayOS fill:#blue,stroke:#333,stroke-width:2px
 ```
-```
+```mermaid
 sequenceDiagram
     actor Admin
     participant Web as Web (Streamlit)
