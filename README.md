@@ -75,6 +75,25 @@ TTTNDKT/
     style Mail2 fill:#gray,stroke:#333,stroke-width:2px
     style PayOS fill:#blue,stroke:#333,stroke-width:2px
 ```
+```
+sequenceDiagram
+    actor Admin
+    participant Web as Web (Streamlit)
+    participant DB as Database
 
-
+    Admin->>Web: Truy cập Trang chủ
+    Web->>Web: Lưu phiên đăng nhập
+    
+    Admin->>Web: Chọn chức năng Thống kê
+    Web->>DB: Yêu cầu dữ liệu truy cập
+    DB-->>Web: Gửi dữ liệu về Streamlit
+    
+    Web->>Web: Kiểm tra dữ liệu (DecisionNode)
+    
+    alt Có dữ liệu (True)
+        Web-->>Admin: Hiển thị thông tin ra vào của sinh viên
+    else Chưa có dữ liệu (False)
+        Web-->>Admin: Hiển thị thông báo "Chưa có dữ liệu ra vào nào"
+    end
+```
 ### HOST tại: **[https://vaagate.streamlit.app/](https://vaagate.streamlit.app/)**
