@@ -79,34 +79,37 @@ TTTNDKT/
 sequenceDiagram
     actor Admin
     participant Web
+    participant AI as Model AI (YOLOv8)
+    participant Server
     participant DB as Database
 
-    Admin->>Web: Đăng nhập
-    Web->>Web: Lưu session
+    Admin->>Web: Chụp ảnh/Upload ảnh thủ công
+    Web->>AI: Gửi hình ảnh xử lý
     
-    rect rgb(240, 240, 240)
-    Note over Admin, Web: Luồng nhập thông tin
-    Admin->>Web: Chọn tài khoản nạp tiền
-    Admin->>Web: Nhập thông tin nạp tiền
+    AI->>AI: Kiểm tra & Nhận diện (YOLOv8/EasyOCR)
+    AI-->>Server: Trả về kết quả (Mã SV & Biển số)
+
+    Server->>DB: Truy vấn thông tin đăng ký
+    DB-->>Server: Kết quả đối chiếu
+    
+    Server->>Server: Kiểm tra tính hợp lệ (Lỗi dữ liệu?)
+    
+    alt Có lỗi dữ liệu (Lệch thông tin)
+        Server->>DB: Lưu vào bảng Cảnh báo (Alerts)
+        Server-->>Web: Gửi thông báo sai lệch
+    else Dữ liệu khớp (Hợp lệ)
+        Server->>Server: Kiểm tra trạng thái xe (IN/OUT)
+        
+        alt Trạng thái "IN" (Xe vào)
+            Server->>DB: Cập nhật thông tin xe vào
+        else Trạng thái "OUT" (Xe ra)
+            Server->>DB: Cập nhật Database & Tính phí gửi xe
+            Note right of Server: Tính 3000đ/lượt (Cộng thêm phí qua đêm nếu có)
+        end
+        
+        Server-->>Web: Trả về thông tin sinh viên & Trạng thái
     end
 
-    alt Admin nhấn Hủy
-        Admin->>Web: Hủy giao dịch
-        Web-->>Admin: Quay lại bước chọn tài khoản
-    else Admin nhấn Xác nhận
-        Admin->>Web: Xác nhận nạp tiền
-        Web->>DB: Thay đổi số dư & Lưu vào cơ sở dữ liệu
-        
-        DB-->>Web: Phản hồi kết quả (Thành công/Lỗi)
-        
-        alt Lưu thất bại
-            Web-->>Admin: Thông báo lỗi
-            Web-->>Admin: Quay lại bước chọn tài khoản
-        else Lưu thành công
-            Web-->>Admin: Thông báo thành công
-            Web->>DB: Thêm vào lịch sử giao dịch
-            Web-->>Admin: Hoàn tất (Kết thúc)
-        end
-    end
+    Web-->>Admin: Hiển thị kết quả lên màn hình
 ```
 ### HOST tại: **[https://vaagate.streamlit.app/](https://vaagate.streamlit.app/)**
