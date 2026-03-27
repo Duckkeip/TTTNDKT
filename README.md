@@ -77,23 +77,25 @@ TTTNDKT/
 ```
 ```mermaid
 sequenceDiagram
-    actor Admin
-    participant Web as Web (Streamlit)
-    participant DB as Database
+    actor User
+    participant Web
+    participant Server
 
-    Admin->>Web: Truy cập Trang chủ
-    Web->>Web: Lưu phiên đăng nhập
+    User->>Web: Đăng nhập vào trang chủ
+    Web->>Web: Lấy session đăng nhập
     
-    Admin->>Web: Chọn chức năng Thống kê
-    Web->>DB: Yêu cầu dữ liệu truy cập
-    DB-->>Web: Gửi dữ liệu về Streamlit
+    User->>Web: Chọn lịch sử ra vào
+    Web->>Server: Truy vấn thông tin theo tài khoản đã đăng nhập
     
-    Web->>Web: Kiểm tra dữ liệu (DecisionNode)
+    Server->>Server: Kiểm tra dữ liệu (DecisionNode)
     
-    alt Có dữ liệu (True)
-        Web-->>Admin: Hiển thị thông tin ra vào của sinh viên
-    else Chưa có dữ liệu (False)
-        Web-->>Admin: Hiển thị thông báo "Chưa có dữ liệu ra vào nào"
+    alt Có dữ liệu
+        Server-->>Web: Trả về danh sách lịch sử
+        Web->>Web: Hiển thị thời gian mới nhất lên đầu bảng
+        Web-->>User: Nhận thông tin ra vào của sinh viên
+    else Không có dữ liệu
+        Server-->>Web: Trả về trạng thái trống
+        Web-->>User: Thông báo chưa có dữ liệu ra vào
     end
 ```
 ### HOST tại: **[https://vaagate.streamlit.app/](https://vaagate.streamlit.app/)**
