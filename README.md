@@ -76,31 +76,64 @@ TTTNDKT/
     style PayOS fill:#blue,stroke:#333,stroke-width:2px
 ```
 ```mermaid
-sequenceDiagram
-    actor User
-    participant Web
-    participant Server
-    participant DB as Database
+classDiagram
+    class User {
+        +ObjectId _id
+        +String username
+        +String student_id
+        +String password
+        +String email
+        +String full_name
+        +String role
+        +Int balance
+        +String user_type
+        +Boolean is_active
+        +DateTime created_at
+        +login()
+        +viewHistory()
+    }
 
-    User->>Web: Đăng nhập vào hệ thống
-    User->>Web: Chọn mục Lịch sử giao dịch
-    
-    Web->>Server: Gửi yêu cầu truy vấn giao dịch (kèm thông tin tài khoản)
-    Server->>DB: Truy vấn giao dịch theo tài khoản đã đăng nhập
-    DB-->>Server: Trả về danh sách giao dịch
-    
-    Server-->>Web: Trả kết quả cho phía Web
-    
-    alt Không có dữ liệu
-        Web-->>User: Hiển thị "Chưa có dữ liệu"
-    else Có dữ liệu
-        Web-->>User: Hiển thị toàn bộ danh sách giao dịch
-        
-        opt Người dùng muốn lọc dữ liệu
-            User->>Web: Lọc thông tin theo ngày, v.v...
-            Web->>Web: Xử lý bộ lọc dữ liệu
-            Web-->>User: Hiển thị thông tin mong muốn (nếu có)
-        end
-    end
+    class Student {
+        +ObjectId _id
+        +String student_id
+        +String full_name
+        +String birthday
+        +String major
+        +String batch
+        +String bank_card
+        +String status
+        +updateInfo()
+    }
+
+    class GateLog {
+        +ObjectId _id
+        +DateTime time
+        +String student_id
+        +String student_name
+        +String plate_detected
+        +String status
+    }
+
+    class RechargeLog {
+        +ObjectId _id
+        +String orderCode
+        +String student_id
+        +Int amount
+        +String status
+        +DateTime time
+    }
+
+    class Alert {
+        +ObjectId _id
+        +DateTime time
+        +String student_id
+        +String description
+        +String plate_detected
+    }
+
+    User "1" -- "1" Student : đại diện cho
+    Student "1" -- "0..*" GateLog : có lịch sử ra vào
+    Student "1" -- "0..*" RechargeLog : có lịch sử nạp tiền
+    Student "1" -- "0..*" Alert : liên quan đến
 ```
 ### HOST tại: **[https://vaagate.streamlit.app/](https://vaagate.streamlit.app/)**
