@@ -77,42 +77,30 @@ TTTNDKT/
 ```
 ```mermaid
 sequenceDiagram
-    actor Student as Sinh viên (User)
-    participant Web as Web (Streamlit)
-    participant Server as Server (Backend)
-    participant PayOS as Server PayOS
-    participant Bank as Ngân hàng
+    actor User
+    participant Web
+    participant Server
     participant DB as Database
 
-    Student->>Web: Đăng nhập & Chọn phương thức nạp tiền
-    Web->>Web: Lưu session
+    User->>Web: Đăng nhập vào hệ thống
+    User->>Web: Chọn mục Lịch sử giao dịch
     
-    Student->>Web: Nhập số tiền cần nạp
-    Web->>Server: Gửi thông tin nạp tiền
+    Web->>Server: Gửi yêu cầu truy vấn giao dịch (kèm thông tin tài khoản)
+    Server->>DB: Truy vấn giao dịch theo tài khoản đã đăng nhập
+    DB-->>Server: Trả về danh sách giao dịch
     
-    Server->>PayOS: Gọi API tạo đơn hàng (payment-requests)
-    PayOS->>Bank: Yêu cầu tạo mã QR-Pay
-    Bank-->>PayOS: Trả về mã QR-Pay cho đơn hàng
-    PayOS-->>Server: Trả về thông tin thanh toán (QR Code link)
+    Server-->>Web: Trả kết quả cho phía Web
     
-    Server->>DB: Lưu hoá đơn với status "Đang chờ"
-    Server-->>Web: Hiển thị mã QR lên giao diện
-    
-    Note over Student, Bank: Giai đoạn thực hiện quét mã
-    
-    alt Sinh viên ấn Hủy
-        Student->>Web: Nhấn nút Hủy
-        Web-->>Student: Quay lại trang chọn phương thức
-    else Sinh viên quét mã thanh toán
-        Student->>Bank: Thực hiện chuyển tiền qua App Ngân hàng
-        Bank-->>PayOS: Cập nhật thanh toán mới (Webhook)
-        PayOS-->>Server: Xác nhận hoàn tất thanh toán (Status: PAID)
+    alt Không có dữ liệu
+        Web-->>User: Hiển thị "Chưa có dữ liệu"
+    else Có dữ liệu
+        Web-->>User: Hiển thị toàn bộ danh sách giao dịch
         
-        Server->>DB: Update hoá đơn thành "Đã trả"
-        Server->>DB: Thêm vào lịch sử giao dịch & Cộng số dư sinh viên
-        
-        Server-->>Web: Thông báo thành công
-        Web-->>Student: Chuyển hướng đến trang "Thanh toán thành công"
+        opt Người dùng muốn lọc dữ liệu
+            User->>Web: Lọc thông tin theo ngày, v.v...
+            Web->>Web: Xử lý bộ lọc dữ liệu
+            Web-->>User: Hiển thị thông tin mong muốn (nếu có)
+        end
     end
 ```
 ### HOST tại: **[https://vaagate.streamlit.app/](https://vaagate.streamlit.app/)**
