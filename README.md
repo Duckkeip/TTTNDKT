@@ -77,39 +77,42 @@ TTTNDKT/
 ```
 ```mermaid
 sequenceDiagram
-    actor Admin
-    participant Web
-    participant AI as Model AI (YOLOv8)
-    participant Server
+    actor Student as Sinh viên (User)
+    participant Web as Web (Streamlit)
+    participant Server as Server (Backend)
+    participant PayOS as Server PayOS
+    participant Bank as Ngân hàng
     participant DB as Database
 
-    Admin->>Web: Chụp ảnh/Upload ảnh thủ công
-    Web->>AI: Gửi hình ảnh xử lý
+    Student->>Web: Đăng nhập & Chọn phương thức nạp tiền
+    Web->>Web: Lưu session
     
-    AI->>AI: Kiểm tra & Nhận diện (YOLOv8/EasyOCR)
-    AI-->>Server: Trả về kết quả (Mã SV & Biển số)
-
-    Server->>DB: Truy vấn thông tin đăng ký
-    DB-->>Server: Kết quả đối chiếu
+    Student->>Web: Nhập số tiền cần nạp
+    Web->>Server: Gửi thông tin nạp tiền
     
-    Server->>Server: Kiểm tra tính hợp lệ (Lỗi dữ liệu?)
+    Server->>PayOS: Gọi API tạo đơn hàng (payment-requests)
+    PayOS->>Bank: Yêu cầu tạo mã QR-Pay
+    Bank-->>PayOS: Trả về mã QR-Pay cho đơn hàng
+    PayOS-->>Server: Trả về thông tin thanh toán (QR Code link)
     
-    alt Có lỗi dữ liệu (Lệch thông tin)
-        Server->>DB: Lưu vào bảng Cảnh báo (Alerts)
-        Server-->>Web: Gửi thông báo sai lệch
-    else Dữ liệu khớp (Hợp lệ)
-        Server->>Server: Kiểm tra trạng thái xe (IN/OUT)
+    Server->>DB: Lưu hoá đơn với status "Đang chờ"
+    Server-->>Web: Hiển thị mã QR lên giao diện
+    
+    Note over Student, Bank: Giai đoạn thực hiện quét mã
+    
+    alt Sinh viên ấn Hủy
+        Student->>Web: Nhấn nút Hủy
+        Web-->>Student: Quay lại trang chọn phương thức
+    else Sinh viên quét mã thanh toán
+        Student->>Bank: Thực hiện chuyển tiền qua App Ngân hàng
+        Bank-->>PayOS: Cập nhật thanh toán mới (Webhook)
+        PayOS-->>Server: Xác nhận hoàn tất thanh toán (Status: PAID)
         
-        alt Trạng thái "IN" (Xe vào)
-            Server->>DB: Cập nhật thông tin xe vào
-        else Trạng thái "OUT" (Xe ra)
-            Server->>DB: Cập nhật Database & Tính phí gửi xe
-            Note right of Server: Tính 3000đ/lượt (Cộng thêm phí qua đêm nếu có)
-        end
+        Server->>DB: Update hoá đơn thành "Đã trả"
+        Server->>DB: Thêm vào lịch sử giao dịch & Cộng số dư sinh viên
         
-        Server-->>Web: Trả về thông tin sinh viên & Trạng thái
+        Server-->>Web: Thông báo thành công
+        Web-->>Student: Chuyển hướng đến trang "Thanh toán thành công"
     end
-
-    Web-->>Admin: Hiển thị kết quả lên màn hình
 ```
 ### HOST tại: **[https://vaagate.streamlit.app/](https://vaagate.streamlit.app/)**
