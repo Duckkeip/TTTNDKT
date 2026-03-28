@@ -79,61 +79,50 @@ TTTNDKT/
 classDiagram
     class User {
         +ObjectId _id
+        +String student_id [FK]
         +String username
-        +String student_id
         +String password
-        +String email
-        +String full_name
         +String role
         +Int balance
-        +String user_type
         +Boolean is_active
-        +DateTime created_at
-        +login()
-        +viewHistory()
     }
 
     class Student {
-        +ObjectId _id
-        +String student_id
+        +String student_id [PK]
         +String full_name
-        +String birthday
         +String major
         +String batch
         +String bank_card
         +String status
-        +updateInfo()
     }
 
     class GateLog {
         +ObjectId _id
-        +DateTime time
-        +String student_id
-        +String student_name
+        +String student_id [FK]
         +String plate_detected
+        +DateTime time
         +String status
     }
 
     class RechargeLog {
         +ObjectId _id
+        +String student_id [FK]
         +String orderCode
-        +String student_id
         +Int amount
         +String status
-        +DateTime time
     }
 
     class Alert {
         +ObjectId _id
-        +DateTime time
-        +String student_id
-        +String description
+        +String student_id [FK]
         +String plate_detected
+        +DateTime time
     }
 
-    User "1" -- "1" Student : đại diện cho
-    Student "1" -- "0..*" GateLog : có lịch sử ra vào
-    Student "1" -- "0..*" RechargeLog : có lịch sử nạp tiền
-    Student "1" -- "0..*" Alert : liên quan đến
+    %% Relationships with link keys
+    User "1" -- "1" Student : "links via student_id"
+    Student "1" -- "0..*" GateLog : "tracks via student_id"
+    Student "1" -- "0..*" RechargeLog : "records via student_id"
+    Student "1" -- "0..*" Alert : "logs via student_id"
 ```
 ### HOST tại: **[https://vaagate.streamlit.app/](https://vaagate.streamlit.app/)**
