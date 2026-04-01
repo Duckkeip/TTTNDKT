@@ -553,7 +553,7 @@ if menu == "📊 Thống kê hệ thống":
 
         # 6. Hiển thị bảng lên Streamlit
         st.dataframe(
-            df_final.style.map(style_status, subset=["TRẠNG THÁI"] if "TRẠNG THÁI" in df_final.columns else [])
+            df_final.style.map(style_status, subset=["TRẠNG THÁI"] if "TRẠNG THÁI" in df_final.columns else []),
             use_container_width=True,
             hide_index=True
         )
