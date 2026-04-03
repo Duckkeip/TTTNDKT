@@ -569,6 +569,38 @@ if menu == "📊 Thống kê hệ thống":
     else:
         st.info("Không tìm thấy dữ liệu phù hợp với bộ lọc (MSSV hoặc Biển số).")
 #ADMIN: Quản lý Users
+def notify_low_balance(student_id, current_balance, user_data):
+    """
+    Hàm kiểm tra số dư và gửi email cảnh báo nếu số dư dưới ngưỡng 10,000 VNĐ.
+    Được gọi khi trừ tiền phí gửi xe hoặc Admin điều chỉnh số dư.
+    """
+    low_balance_threshold = 10000 
+    days_between_warnings = 3
+    now = datetime.now(vn_tz)
+
+    if current_balance < low_balance_threshold:
+        # Lấy mốc thời gian gửi lần cuối từ database
+        last_sent = user_data.get("last_warning_sent")
+
+        # Kiểm tra nếu chưa bao giờ gửi hoặc đã quá 3 ngày (tránh spam)
+        if not last_sent or (now - last_sent.replace(tzinfo=vn_tz)).days >= days_between_warnings:
+            from utils.email_service import send_custom_email, get_low_balance_template
+            
+            user_email = user_data.get("email")
+            if user_email:
+                # Tạo nội dung email từ template
+                html_warn = get_low_balance_template(user_data['full_name'], current_balance)
+                
+                # Thực hiện gửi email
+                sent = send_custom_email(user_email, "[VAA Parking] Cảnh báo số dư tài khoản thấp", html_warn)
+                
+                if sent:
+                    # Cập nhật lại mốc thời gian gửi vào MongoDB
+                    db["users"].update_one(
+                        {"student_id": student_id},
+                        {"$set": {"last_warning_sent": now}}
+                    )
+                    print(f">>> Đã gửi email cảnh báo cho {student_id}")
 if menu == "👥 Quản lý người dùng":
     st.header("💰 Quản lý Ngân khố & Người dùng")
 
@@ -869,38 +901,7 @@ def get_student_from_db(student_id):
     }
     return students_col.find_one(query)
 
-def notify_low_balance(student_id, current_balance, user_data):
-    """
-    Hàm kiểm tra số dư và gửi email cảnh báo nếu số dư dưới ngưỡng 10,000 VNĐ.
-    Được gọi khi trừ tiền phí gửi xe hoặc Admin điều chỉnh số dư.
-    """
-    low_balance_threshold = 10000 
-    days_between_warnings = 3
-    now = datetime.now(vn_tz)
 
-    if current_balance < low_balance_threshold:
-        # Lấy mốc thời gian gửi lần cuối từ database
-        last_sent = user_data.get("last_warning_sent")
-
-        # Kiểm tra nếu chưa bao giờ gửi hoặc đã quá 3 ngày (tránh spam)
-        if not last_sent or (now - last_sent.replace(tzinfo=vn_tz)).days >= days_between_warnings:
-            from utils.email_service import send_custom_email, get_low_balance_template
-            
-            user_email = user_data.get("email")
-            if user_email:
-                # Tạo nội dung email từ template
-                html_warn = get_low_balance_template(user_data['full_name'], current_balance)
-                
-                # Thực hiện gửi email
-                sent = send_custom_email(user_email, "[VAA Parking] Cảnh báo số dư tài khoản thấp", html_warn)
-                
-                if sent:
-                    # Cập nhật lại mốc thời gian gửi vào MongoDB
-                    db["users"].update_one(
-                        {"student_id": student_id},
-                        {"$set": {"last_warning_sent": now}}
-                    )
-                    print(f">>> Đã gửi email cảnh báo cho {student_id}")
 def check_gate_process(plate_detected, mssv_ocr):
     now = datetime.now(vn_tz)
     users_col = db["users"]
