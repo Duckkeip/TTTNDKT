@@ -865,7 +865,26 @@ def get_student_from_db(student_id):
     }
     return students_col.find_one(query)
 
+def notify_low_balance(student_id, current_balance, user_data):
+    """Kiểm tra và gửi mail nếu số dư sau khi giảm xuống dưới ngưỡng"""
+    low_balance_threshold = 10000
+    days_between_warnings = 3
+    now = datetime.now(vn_tz)
 
+    if current_balance < low_balance_threshold:
+        last_sent = user_data.get("last_warning_sent")
+        # Kiểm tra giãn cách để không spam email
+        if not last_sent or (now - last_sent.replace(tzinfo=vn_tz)).days >= days_between_warnings:
+            from utils.email_service import send_custom_email, get_low_balance_template
+            user_email = user_data.get("email")
+            if user_email:
+                html_warn = get_low_balance_template(user_data['full_name'], current_balance)
+                sent = send_custom_email(user_email, "[VAA Parking] Cảnh báo số dư thấp", html_warn)
+                if sent:
+                    db["users"].update_one(
+                        {"student_id": student_id},
+                        {"$set": {"last_warning_sent": now}}
+                    )
 def check_gate_process(plate_detected, mssv_ocr):
     now = datetime.now(vn_tz)
     users_col = db["users"]  # Sử dụng collection users mới
@@ -876,57 +895,35 @@ def check_gate_process(plate_detected, mssv_ocr):
         return "ERROR", f"Tài khoản {mssv_ocr} không tồn tại trên hệ thống!"
 
     current_balance = user_data.get("balance", 0)
-    low_balance_threshold = 10000  # Ngưỡng cảnh báo: 10,000 VNĐ
-    days_between_warnings = 3  # Khoảng cách giữa các lần thông báo: 3 ngày
 
-    if current_balance < low_balance_threshold:
-        last_sent = user_data.get("last_warning_sent")
-
-        # Kiểm tra nếu chưa bao giờ gửi hoặc đã quá số ngày quy định
-        if not last_sent or (now - last_sent.replace(tzinfo=vn_tz)).days >= days_between_warnings:
-            from utils.email_service import send_custom_email, get_low_balance_template
-
-            user_email = user_data.get("email")
-            if user_email:
-                html_warn = get_low_balance_template(user_data['full_name'], current_balance)
-                sent = send_custom_email(user_email, "[VAA Parking] Cảnh báo số dư tài khoản thấp", html_warn)
-
-                if sent:
-                    # Cập nhật lại mốc thời gian đã gửi vào Database
-                    users_col.update_one(
-                        {"student_id": mssv_ocr},
-                        {"$set": {"last_warning_sent": now}}
-                    )
-
-    # 2. Xác định phí (Cán bộ miễn phí, Sinh viên 3000đ)
+    # 2. Xác định phí
     is_staff = (user_data.get("user_type") == "staff")
     fee = 0 if is_staff else 3000
 
     # 3. Tìm lượt VÀO (IN) gần nhất
-    last_log = logs_col.find_one(
-        {"student_id": mssv_ocr},
-        sort=[("time", -1)]
-    )
+    last_log = logs_col.find_one({"student_id": mssv_ocr}, sort=[("time", -1)])
 
     def clean(p):
         return "".join(filter(str.isalnum, str(p))).upper()
 
-    # --- TRƯỜNG HỢP: XE ĐANG RA (OUT) ---
-    # --- XE ĐANG TRONG BÃI ---
+    # --- XE ĐANG RA (OUT) ---
     if last_log and last_log["status"] == "IN":
-
         plate_at_in = last_log.get("plate_detected")
 
         if clean(plate_detected) == clean(plate_at_in):
+            # Kiểm tra đủ tiền trước khi trừ
+            if not is_staff and current_balance < fee:
+                return "LOW_BALANCE", "Số dư không đủ để thanh toán!"
 
-            if not is_staff and user_data["balance"] < fee:
-                return "LOW_BALANCE", "Số dư không đủ!"
-
+            # THỰC HIỆN TRỪ TIỀN
             if fee > 0:
                 users_col.update_one(
                     {"student_id": mssv_ocr},
                     {"$inc": {"balance": -fee}}
                 )
+                # GỌI THÔNG BÁO NGAY SAU KHI GIẢM TIỀN
+                new_balance = current_balance - fee
+                notify_low_balance(mssv_ocr, new_balance, user_data)
 
             logs_col.insert_one({
                 "time": now,
@@ -936,12 +933,10 @@ def check_gate_process(plate_detected, mssv_ocr):
                 "status": "OUT",
                 "fee_charged": fee
             })
+            return "SUCCESS_OUT", "Xe ra bãi thành công"
 
-            return "SUCCESS_OUT", "Xe ra bãi"
-
-    # --- XE ĐANG NGOÀI ---
+    # --- XE ĐANG VÀO (IN) ---
     else:
-
         logs_col.insert_one({
             "time": now,
             "student_id": mssv_ocr,
@@ -949,8 +944,7 @@ def check_gate_process(plate_detected, mssv_ocr):
             "plate_detected": plate_detected,
             "status": "IN"
         })
-
-        return "SUCCESS_IN", "Xe vào bãi"
+        return "SUCCESS_IN", "Xe vào bãi thành công"
 def get_student_from_db(student_id):
     """Tìm kiếm sinh viên linh hoạt (String/Int)"""
     clean_id = str(student_id).strip().replace('"', '')
