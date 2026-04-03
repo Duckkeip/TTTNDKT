@@ -866,20 +866,20 @@ def get_student_from_db(student_id):
     return students_col.find_one(query)
 
 def notify_low_balance(student_id, current_balance, user_data):
-    """Kiểm tra và gửi mail nếu số dư sau khi giảm xuống dưới ngưỡng"""
-    low_balance_threshold = 10000
+    """Hàm kiểm tra và gửi mail ngay khi số dư thực tế đã giảm"""
+    low_balance_threshold = 10000 
     days_between_warnings = 3
     now = datetime.now(vn_tz)
 
     if current_balance < low_balance_threshold:
         last_sent = user_data.get("last_warning_sent")
-        # Kiểm tra giãn cách để không spam email
+        # Chống spam: 3 ngày mới gửi 1 lần
         if not last_sent or (now - last_sent.replace(tzinfo=vn_tz)).days >= days_between_warnings:
             from utils.email_service import send_custom_email, get_low_balance_template
             user_email = user_data.get("email")
             if user_email:
                 html_warn = get_low_balance_template(user_data['full_name'], current_balance)
-                sent = send_custom_email(user_email, "[VAA Parking] Cảnh báo số dư thấp", html_warn)
+                sent = send_custom_email(user_email, "[VAA Parking] Cảnh báo số dư tài khoản thấp", html_warn)
                 if sent:
                     db["users"].update_one(
                         {"student_id": student_id},
@@ -887,9 +887,9 @@ def notify_low_balance(student_id, current_balance, user_data):
                     )
 def check_gate_process(plate_detected, mssv_ocr):
     now = datetime.now(vn_tz)
-    users_col = db["users"]  # Sử dụng collection users mới
+    users_col = db["users"]
 
-    # 1. Tìm thông tin người dùng trong collection users
+    # 1. Tìm thông tin người dùng
     user_data = users_col.find_one({"student_id": mssv_ocr})
     if not user_data:
         return "ERROR", f"Tài khoản {mssv_ocr} không tồn tại trên hệ thống!"
@@ -906,22 +906,22 @@ def check_gate_process(plate_detected, mssv_ocr):
     def clean(p):
         return "".join(filter(str.isalnum, str(p))).upper()
 
-    # --- XE ĐANG RA (OUT) ---
+    # --- TRƯỜNG HỢP: XE ĐANG RA (OUT) ---
     if last_log and last_log["status"] == "IN":
         plate_at_in = last_log.get("plate_detected")
 
         if clean(plate_detected) == clean(plate_at_in):
-            # Kiểm tra đủ tiền trước khi trừ
+            # Kiểm tra đủ tiền trước khi cho ra
             if not is_staff and current_balance < fee:
                 return "LOW_BALANCE", "Số dư không đủ để thanh toán!"
 
-            # THỰC HIỆN TRỪ TIỀN
+            # THỰC HIỆN GIẢM TIỀN
             if fee > 0:
                 users_col.update_one(
                     {"student_id": mssv_ocr},
                     {"$inc": {"balance": -fee}}
                 )
-                # GỌI THÔNG BÁO NGAY SAU KHI GIẢM TIỀN
+                # GỌI BÁO NGAY KHI TIỀN VỪA GIẢM
                 new_balance = current_balance - fee
                 notify_low_balance(mssv_ocr, new_balance, user_data)
 
@@ -935,7 +935,7 @@ def check_gate_process(plate_detected, mssv_ocr):
             })
             return "SUCCESS_OUT", "Xe ra bãi thành công"
 
-    # --- XE ĐANG VÀO (IN) ---
+    # --- TRƯỜNG HỢP: XE ĐANG VÀO (IN) ---
     else:
         logs_col.insert_one({
             "time": now,
