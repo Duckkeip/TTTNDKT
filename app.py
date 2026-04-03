@@ -594,6 +594,10 @@ if menu == "👥 Quản lý người dùng":
                         {"$inc": {"balance": amount}}
                     )
                     # 2. Lấy số dư mới và gửi mail ngay lập tức
+                    updated_user = db["users"].find_one({"student_id": target_mssv})
+                    # Gọi hàm thông báo (bạn cần dán hàm notify_low_balance tôi đưa ở câu trước vào app.py)
+                    notify_low_balance(target_mssv, updated_user['balance'], updated_user)
+                    
                     new_balance = target_user.get("balance", 0) + amount
                     user_email = target_user.get("email")
                     print(f">>> Email tìm thấy: {user_email}")
