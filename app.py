@@ -579,7 +579,7 @@ if menu == "👥 Quản lý người dùng":
         st.subheader("Nạp tiền vào ví")
         with st.form("recharge_form"):
             target_mssv = st.text_input("Nhập MSSV cần nạp")
-            amount = st.number_input("Số tiền nạp (VNĐ)", min_value=1000, step=1000)
+            amount = st.number_input("Số tiền nạp (VNĐ)", min_value=-50000, step=1000)
             reason = st.selectbox("Hình thức", ["Chuyển khoản Ngân hàng", "Tiền mặt", "Khuyến mãi"])
             submit_nap = st.form_submit_button("Xác nhận nạp tiền")
 
