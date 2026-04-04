@@ -207,6 +207,7 @@ def auth_ui(db):
                         "full_name": new_name,
                         "balance": 0,
                         "role": "user",
+                        "user_type":"student",
                         "is_active": False,  # Chưa được phép đăng nhập
                         "verification_token": verification_token,
                         "created_at": datetime.now()
