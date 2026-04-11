@@ -919,9 +919,11 @@ def check_gate_process(plate_detected, mssv_ocr):
     now = datetime.now(vn_tz)
     users_col = db["users"]
 
+    print(f"DEBUG: Dang xu ly cho MSSV {mssv_ocr}...")
     # 1. Tìm thông tin người dùng
     user_data = users_col.find_one({"student_id": mssv_ocr})
     if not user_data:
+        print(f"DEBUG: Khong tim thay User {mssv_ocr} trong bang USERS")
         return "ERROR", f"Tài khoản {mssv_ocr} không tồn tại trên hệ thống!"
 
     current_balance = user_data.get("balance", 0)
