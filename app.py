@@ -482,16 +482,27 @@ if menu == "📊 Thống kê hệ thống":
     
         total_logs = len(df) if not df.empty else 0
     
-        # Tính số xe đang trong bãi (Logic: bản ghi cuối cùng của mỗi biển số là 'IN')
         pipeline = [
             {"$sort": {"time": -1}},
-            {"$group": {"_id": "$plate", "last_status": {"$first": "$status"}}},
+            {
+                "$group": {
+                    "_id": "$plate_detected",  # Tên trường phải khớp với DB của bạn
+                    "last_status": {"$first": "$status"}
+                }
+            },
             {"$match": {"last_status": "IN"}}
         ]
-        vehicles_inside = len(list(logs_col.aggregate(pipeline)))
+        
+        # Thêm try-except để tránh lỗi vặt làm treo giao diện
+        try:
+            vehicles_inside = len(list(logs_col.aggregate(pipeline)))
+        except:
+            vehicles_inside = 0
     
-        # Tính doanh thu từ các bản ghi đã lọc
-        total_revenue = df['fee'].sum() if not df.empty and 'fee' in df.columns else 0
+        # Tính doanh thu: Lưu ý dùng đúng tên trường 'fee_charged' hoặc 'fee' tùy DB của bạn
+        # Nếu trong DB lưu là 'fee_charged' thì sửa df['fee'] thành df['fee_charged']
+        fee_col = 'fee' if 'fee' in df.columns else ('fee_charged' if 'fee_charged' in df.columns else None)
+        total_revenue = df[fee_col].sum() if fee_col and not df.empty else 0
     
         col1.metric("Tổng lượt (Lọc)", f"{total_logs}")
         col2.metric("Xe trong bãi", f"{vehicles_inside}")
