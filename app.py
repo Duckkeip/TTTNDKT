@@ -964,7 +964,9 @@ def check_gate_process(plate_detected, mssv_ocr):
                 "fee_charged": fee
             })
             return "SUCCESS_OUT", "Xe ra bãi thành công"
-
+        else:
+            # THÊM ĐOẠN NÀY VÀO:
+            return "ERROR_PLATE", f"Biển số ra ({plate_detected}) không khớp với lúc vào ({plate_at_in})!"
     # --- TRƯỜNG HỢP: XE ĐANG VÀO (IN) ---
     else:
         logs_col.insert_one({
