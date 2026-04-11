@@ -450,124 +450,126 @@ if menu == "📜 Lịch sử cá nhân":
 # --- NỘI DUNG CHO ADMIN: THỐNG KÊ ---
 if menu == "📊 Thống kê hệ thống":
     st.title("📊 Báo cáo & Thống kê Chuyên sâu")
-
-    # --- PHẦN 1: BỘ LỌC (FILTERS) ---
-    with st.expander("🔍 Bộ lọc tìm kiếm", expanded=True):
-        col_f1, col_f2, col_f3 = st.columns(3)
-        with col_f1:
-            search_mssv = st.text_input("Mã số sinh viên", placeholder="Nhập MSSV...")
-        with col_f2:
-            search_plate = st.text_input("Biển số xe", placeholder="Nhập biển số...")
-        with col_f3:
-            filter_status = st.selectbox("Trạng thái", ["Tất cả", "IN", "OUT"])
-
-    # Xây dựng query cho MongoDB dựa trên bộ lọc
-    query = {}
-    if search_mssv:
-        # Sửa từ "mssv" thành "student_id"
-        query["student_id"] = {"$regex": search_mssv, "$options": "i"}
-    if search_plate:
-        # Sửa từ "plate" thành "plate_detected"
-        query["plate_detected"] = {"$regex": search_plate, "$options": "i"}
-    if filter_status != "Tất cả":
-        query["status"] = filter_status
-
-    # Lấy dữ liệu đã lọc
-    filtered_logs = list(logs_col.find(query).sort("time", -1))
-    df = pd.DataFrame(filtered_logs)
-
-    # --- PHẦN 2: METRICS (THỐNG KÊ NHANH) ---
-    col1, col2, col3, col4 = st.columns(4)
-
-    total_logs = len(df) if not df.empty else 0
-
-    # Tính số xe đang trong bãi (Logic: bản ghi cuối cùng của mỗi biển số là 'IN')
-    pipeline = [
-        {"$sort": {"time": -1}},
-        {"$group": {"_id": "$plate", "last_status": {"$first": "$status"}}},
-        {"$match": {"last_status": "IN"}}
-    ]
-    vehicles_inside = len(list(logs_col.aggregate(pipeline)))
-
-    # Tính doanh thu từ các bản ghi đã lọc
-    total_revenue = df['fee'].sum() if not df.empty and 'fee' in df.columns else 0
-
-    col1.metric("Tổng lượt (Lọc)", f"{total_logs}")
-    col2.metric("Xe trong bãi", f"{vehicles_inside}")
-    col3.metric("Doanh thu (Lọc)", f"{total_revenue:,.0f}đ")
-    col4.metric("Cảnh báo", f"{alerts_col.count_documents({})}")
-
-    # --- PHẦN 3: BIỂU ĐỒ (VISUALIZATION) ---
-    if not df.empty:
-        st.subheader("📈 Biểu đồ lưu lượng")
-        df["time"] = pd.to_datetime(df["time"]).dt.tz_localize("UTC").dt.tz_convert("Asia/Ho_Chi_Minh")
-
-        # Biểu đồ đường theo giờ/ngày
-        df['hour'] = df['time'].dt.hour
-        hourly_counts = df.groupby(['hour', 'status']).size().unstack(fill_value=0)
-        st.area_chart(hourly_counts)
-
-    # --- PHẦN 4: BẢNG DỮ LIỆU ---
-    st.subheader("📝 Nhật ký chi tiết")
-
-    if not df.empty:
-        # 1. Tạo bản sao để xử lý hiển thị
-        df_display = df.copy()
-
-        # 2. Xử lý thời gian (Chuyển từ UTC sang Giờ Việt Nam)
-        if "time" in df_display.columns:
-            df_display["time"] = pd.to_datetime(df_display["time"]).dt.tz_convert("Asia/Ho_Chi_Minh")
-            df_display["time"] = df_display["time"].dt.strftime("%d-%m-%Y %H:%M:%S")
-        if "fee_charged" in df_display.columns:
-            # Chuyển về số (đề phòng dữ liệu dạng chuỗi) và định dạng 1,000 VNĐ
-            df_display["fee_charged"] = df_display["fee_charged"].apply(
-                lambda x: f"{x:,.0f} VNĐ" if pd.notnull(x) else "0 VNĐ")
-        # 3. Chọn đúng các cột đang có trong DB của bạn
-        # Dựa theo ảnh: student_id, student_name, plate_detected, status, fee_charged
-        cols_to_show = ["time", "student_id", "student_name", "plate_detected", "status", "fee_charged"]
-
-        # Chỉ lấy những cột thực sự tồn tại để tránh lỗi crash
-        existing_cols = [c for c in cols_to_show if c in df_display.columns]
-        df_final = df_display[existing_cols]
-
-        # 4. Đổi tên tiêu đề cột cho chuyên nghiệp (Viết tiếng Việt có dấu)
-        rename_map = {
-            "time": "THỜI GIAN",
-            "student_id": "MSSV",
-            "student_name": "HỌ TÊN",
-            "plate_detected": "BIỂN SỐ",
-            "status": "TRẠNG THÁI",
-            "fee_charged": "PHÍ (VNĐ)"
-        }
-        df_final = df_final.rename(columns=rename_map)
-
-
-        # 5. Định dạng màu sắc dựa trên cột TRẠNG THÁI
-        def style_status(val):
-            if val == "IN":
-                return "background-color: #d4edda; color: #155724; font-weight: bold;"
-            elif val == "OUT":
-                return "background-color: #f8d7da; color: #721c24; font-weight: bold;"
-            return ""
-
-
-        # 6. Hiển thị bảng lên Streamlit
-        st.dataframe(
-            df_final.style.map(style_status, subset=["TRẠNG THÁI"] if "TRẠNG THÁI" in df_final.columns else []),
-            use_container_width=True,
-            hide_index=True
-        )
-
-        # 7. Nút xuất file (Giữ nguyên MSSV và Biển số trong file CSV)
-        csv = df_display.to_csv(index=False).encode('utf-8-sig')
-        st.download_button(
-            label="📥 Tải báo cáo chi tiết (MSSV & Biển số)",
-            data=csv,
-            file_name=f"nhat_ky_xe_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv"
-        )
-    else:
-        st.info("Không tìm thấy dữ liệu phù hợp với bộ lọc (MSSV hoặc Biển số).")
+    @st.fragment(run_every="30s")
+    def show_dashboard():
+        # --- PHẦN 1: BỘ LỌC (FILTERS) ---
+        with st.expander("🔍 Bộ lọc tìm kiếm", expanded=True):
+            col_f1, col_f2, col_f3 = st.columns(3)
+            with col_f1:
+                search_mssv = st.text_input("Mã số sinh viên", placeholder="Nhập MSSV...")
+            with col_f2:
+                search_plate = st.text_input("Biển số xe", placeholder="Nhập biển số...")
+            with col_f3:
+                filter_status = st.selectbox("Trạng thái", ["Tất cả", "IN", "OUT"])
+    
+        # Xây dựng query cho MongoDB dựa trên bộ lọc
+        query = {}
+        if search_mssv:
+            # Sửa từ "mssv" thành "student_id"
+            query["student_id"] = {"$regex": search_mssv, "$options": "i"}
+        if search_plate:
+            # Sửa từ "plate" thành "plate_detected"
+            query["plate_detected"] = {"$regex": search_plate, "$options": "i"}
+        if filter_status != "Tất cả":
+            query["status"] = filter_status
+    
+        # Lấy dữ liệu đã lọc
+        filtered_logs = list(logs_col.find(query).sort("time", -1))
+        df = pd.DataFrame(filtered_logs)
+    
+        # --- PHẦN 2: METRICS (THỐNG KÊ NHANH) ---
+        col1, col2, col3, col4 = st.columns(4)
+    
+        total_logs = len(df) if not df.empty else 0
+    
+        # Tính số xe đang trong bãi (Logic: bản ghi cuối cùng của mỗi biển số là 'IN')
+        pipeline = [
+            {"$sort": {"time": -1}},
+            {"$group": {"_id": "$plate", "last_status": {"$first": "$status"}}},
+            {"$match": {"last_status": "IN"}}
+        ]
+        vehicles_inside = len(list(logs_col.aggregate(pipeline)))
+    
+        # Tính doanh thu từ các bản ghi đã lọc
+        total_revenue = df['fee'].sum() if not df.empty and 'fee' in df.columns else 0
+    
+        col1.metric("Tổng lượt (Lọc)", f"{total_logs}")
+        col2.metric("Xe trong bãi", f"{vehicles_inside}")
+        col3.metric("Doanh thu (Lọc)", f"{total_revenue:,.0f}đ")
+        col4.metric("Cảnh báo", f"{alerts_col.count_documents({})}")
+    
+        # --- PHẦN 3: BIỂU ĐỒ (VISUALIZATION) ---
+        if not df.empty:
+            st.subheader("📈 Biểu đồ lưu lượng")
+            df["time"] = pd.to_datetime(df["time"]).dt.tz_localize("UTC").dt.tz_convert("Asia/Ho_Chi_Minh")
+    
+            # Biểu đồ đường theo giờ/ngày
+            df['hour'] = df['time'].dt.hour
+            hourly_counts = df.groupby(['hour', 'status']).size().unstack(fill_value=0)
+            st.area_chart(hourly_counts)
+    
+        # --- PHẦN 4: BẢNG DỮ LIỆU ---
+        st.subheader("📝 Nhật ký chi tiết")
+    
+        if not df.empty:
+            # 1. Tạo bản sao để xử lý hiển thị
+            df_display = df.copy()
+    
+            # 2. Xử lý thời gian (Chuyển từ UTC sang Giờ Việt Nam)
+            if "time" in df_display.columns:
+                df_display["time"] = pd.to_datetime(df_display["time"]).dt.tz_convert("Asia/Ho_Chi_Minh")
+                df_display["time"] = df_display["time"].dt.strftime("%d-%m-%Y %H:%M:%S")
+            if "fee_charged" in df_display.columns:
+                # Chuyển về số (đề phòng dữ liệu dạng chuỗi) và định dạng 1,000 VNĐ
+                df_display["fee_charged"] = df_display["fee_charged"].apply(
+                    lambda x: f"{x:,.0f} VNĐ" if pd.notnull(x) else "0 VNĐ")
+            # 3. Chọn đúng các cột đang có trong DB của bạn
+            # Dựa theo ảnh: student_id, student_name, plate_detected, status, fee_charged
+            cols_to_show = ["time", "student_id", "student_name", "plate_detected", "status", "fee_charged"]
+    
+            # Chỉ lấy những cột thực sự tồn tại để tránh lỗi crash
+            existing_cols = [c for c in cols_to_show if c in df_display.columns]
+            df_final = df_display[existing_cols]
+    
+            # 4. Đổi tên tiêu đề cột cho chuyên nghiệp (Viết tiếng Việt có dấu)
+            rename_map = {
+                "time": "THỜI GIAN",
+                "student_id": "MSSV",
+                "student_name": "HỌ TÊN",
+                "plate_detected": "BIỂN SỐ",
+                "status": "TRẠNG THÁI",
+                "fee_charged": "PHÍ (VNĐ)"
+            }
+            df_final = df_final.rename(columns=rename_map)
+    
+    
+            # 5. Định dạng màu sắc dựa trên cột TRẠNG THÁI
+            def style_status(val):
+                if val == "IN":
+                    return "background-color: #d4edda; color: #155724; font-weight: bold;"
+                elif val == "OUT":
+                    return "background-color: #f8d7da; color: #721c24; font-weight: bold;"
+                return ""
+    
+    
+            # 6. Hiển thị bảng lên Streamlit
+            st.dataframe(
+                df_final.style.map(style_status, subset=["TRẠNG THÁI"] if "TRẠNG THÁI" in df_final.columns else []),
+                use_container_width=True,
+                hide_index=True
+            )
+    
+            # 7. Nút xuất file (Giữ nguyên MSSV và Biển số trong file CSV)
+            csv = df_display.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                label="📥 Tải báo cáo chi tiết (MSSV & Biển số)",
+                data=csv,
+                file_name=f"nhat_ky_xe_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("Không tìm thấy dữ liệu phù hợp với bộ lọc (MSSV hoặc Biển số).")
+    show_dashboard()
 #ADMIN: Quản lý Users
 def notify_low_balance(student_id, current_balance, user_data):
     """
