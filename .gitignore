@@ -16,5 +16,5 @@ __pycache__/
 venv/
 bat/run_ai.bat
 
-a.py
-appx.py
+a.py/
+appx.py/
