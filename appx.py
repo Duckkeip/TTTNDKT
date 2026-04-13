@@ -18,8 +18,9 @@ from dotenv import load_dotenv
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
 from services.auth_service import auth_ui
 from twilio.rest import Client
-from utils.email_service import send_custom_email, get_transaction_template, get_gate_activity_template
+
 import os
+
 load_dotenv()
 #PAYOS
 from payos import PayOS
@@ -38,12 +39,31 @@ expire_time = int(time.time() + 600)
 vn_tz = pytz.timezone('Asia/Ho_Chi_Minh')
 # Khởi tạo bộ nhớ tạm để "ghép cặp" nếu upload nhiều ảnh khác nhau
 if 'pair_data' not in st.session_state:
-    st.session_state.pair_data = {"mssv": None, "plate": None, "raw_info": None}
+    st.session_state.pair_data = {
+        "mssv": None, "plate": None,
+        "raw_info": None, "db_info": None,
+        "img_sv": None, "img_plate": None  # Thêm 2 dòng này
+    }
+# Bộ nhớ tạm để lưu kết quả quét được từ Camera
+if 'cam_storage' not in st.session_state:
+    st.session_state.cam_storage = {"mssv": None, "plate": None, "user_name": None}
+
 if "cam_key" not in st.session_state:
     st.session_state.cam_key = 0
 SCAN_COOLDOWN = 4
 if "last_scan_time" not in st.session_state:
     st.session_state.last_scan_time = {}
+
+if "upload_pair" not in st.session_state:
+    st.session_state.upload_pair = {
+        "mssv": None,
+        "plate": None,
+        "raw_info": None,
+        "db_info": None,
+        "img_sv": None,
+        "img_plate": None
+    }
+
 
 
 @st.cache_resource
@@ -231,7 +251,7 @@ with st.expander("📜 Lịch sử giao dịch", expanded=True):
                                 new_balance = updated_user.get("balance", 0)
                                 user_email = updated_user.get("email")
 
-
+                                from utils.email_service import send_custom_email, get_transaction_template
                                 # 3. Gửi Email thông báo qua PayOS
                                 if user_email:
                                     html_body = get_transaction_template(
@@ -385,12 +405,12 @@ if st.sidebar.button("🚪 Đăng xuất"):
 # Nếu là User bình thường, dừng các logic quét ở dưới và chỉ hiện lịch sử
 if menu == "📜 Lịch sử cá nhân":
     st.title("📜 Lịch sử cá nhân")
-    
+
     # Tab hiển thị: 1 bên là Lịch sử ra vào, 1 bên là Nạp tiền
     tab1, tab2 = st.tabs(["🚗 Lịch sử ra vào", "💳 Nạp tiền vào ví"])
 
     with tab1:
-        
+
         my_logs = list(logs_col.find({"student_id": user["student_id"]}).sort("time", -1))
         if my_logs:
             st.dataframe(pd.DataFrame(my_logs).drop(columns=["_id"]), use_container_width=True)
@@ -400,7 +420,7 @@ if menu == "📜 Lịch sử cá nhân":
     with tab2:
         if "checkout_url" not in st.session_state:
             st.session_state.checkout_url = None
-        
+
         st.subheader("Nạp tiền tự động qua QR (Ngân hàng)")
 
         with st.form("payment_form"):
@@ -410,8 +430,8 @@ if menu == "📜 Lịch sử cá nhân":
                 try:
                     order_code = int(datetime.now().timestamp() * 1000)
                     final_amount = int(amount)
-                    
-                    
+
+
 
                     payment_data = CreatePaymentLinkRequest(
                         orderCode=order_code,
@@ -435,7 +455,7 @@ if menu == "📜 Lịch sử cá nhân":
                         "status": "PENDING",
                         "time": datetime.now(vn_tz)
                     })
-                    
+
                     st.session_state.checkout_url = pay_link.checkout_url
                     st.success("✅ Đã tạo mã thanh toán!")
                 except Exception as e:
@@ -443,12 +463,12 @@ if menu == "📜 Lịch sử cá nhân":
         if st.session_state.checkout_url:
             st.markdown(f"**Vui lòng quét mã QR bên dưới để hoàn tất:**")
             st.components.v1.iframe(st.session_state.checkout_url, height=700, scrolling=True)
-        
+
         # Thêm nút để ẩn mã QR nếu khách hàng muốn hủy
             if st.button("Hủy/Đóng mã QR này"):
                 st.session_state.checkout_url = None
                 st.rerun()
-            
+
 # --- NỘI DUNG CHO ADMIN: THỐNG KÊ ---
 if menu == "📊 Thống kê hệ thống":
     st.title("📊 Báo cáo & Thống kê Chuyên sâu")
@@ -463,7 +483,7 @@ if menu == "📊 Thống kê hệ thống":
                 search_plate = st.text_input("Biển số xe", placeholder="Nhập biển số...")
             with col_f3:
                 filter_status = st.selectbox("Trạng thái", ["Tất cả", "IN", "OUT"])
-    
+
         # Xây dựng query cho MongoDB dựa trên bộ lọc
         query = {}
         if search_mssv:
@@ -474,16 +494,16 @@ if menu == "📊 Thống kê hệ thống":
             query["plate_detected"] = {"$regex": search_plate, "$options": "i"}
         if filter_status != "Tất cả":
             query["status"] = filter_status
-    
+
         # Lấy dữ liệu đã lọc
         filtered_logs = list(logs_col.find(query).sort("time", -1))
         df = pd.DataFrame(filtered_logs)
-    
+
         # --- PHẦN 2: METRICS (THỐNG KÊ NHANH) ---
         col1, col2, col3, col4 = st.columns(4)
-    
+
         total_logs = len(df) if not df.empty else 0
-    
+
         pipeline = [
             {"$sort": {"time": -1}},
             {
@@ -494,40 +514,40 @@ if menu == "📊 Thống kê hệ thống":
             },
             {"$match": {"last_status": "IN"}}
         ]
-        
+
         # Thêm try-except để tránh lỗi vặt làm treo giao diện
         try:
             vehicles_inside = len(list(logs_col.aggregate(pipeline)))
         except:
             vehicles_inside = 0
-    
+
         # Tính doanh thu: Lưu ý dùng đúng tên trường 'fee_charged' hoặc 'fee' tùy DB của bạn
         # Nếu trong DB lưu là 'fee_charged' thì sửa df['fee'] thành df['fee_charged']
         fee_col = 'fee' if 'fee' in df.columns else ('fee_charged' if 'fee_charged' in df.columns else None)
         total_revenue = df[fee_col].sum() if fee_col and not df.empty else 0
-    
+
         col1.metric("Tổng lượt (Lọc)", f"{total_logs}")
         col2.metric("Xe trong bãi", f"{vehicles_inside}")
         col3.metric("Doanh thu (Lọc)", f"{total_revenue:,.0f}đ")
         col4.metric("Cảnh báo", f"{alerts_col.count_documents({})}")
-    
+
         # --- PHẦN 3: BIỂU ĐỒ (VISUALIZATION) ---
         if not df.empty:
             st.subheader("📈 Biểu đồ lưu lượng")
             df["time"] = pd.to_datetime(df["time"]).dt.tz_localize("UTC").dt.tz_convert("Asia/Ho_Chi_Minh")
-    
+
             # Biểu đồ đường theo giờ/ngày
             df['hour'] = df['time'].dt.hour
             hourly_counts = df.groupby(['hour', 'status']).size().unstack(fill_value=0)
             st.area_chart(hourly_counts)
-    
+
         # --- PHẦN 4: BẢNG DỮ LIỆU ---
         st.subheader("📝 Nhật ký chi tiết")
-    
+
         if not df.empty:
             # 1. Tạo bản sao để xử lý hiển thị
             df_display = df.copy()
-    
+
             # 2. Xử lý thời gian (Chuyển từ UTC sang Giờ Việt Nam)
             if "time" in df_display.columns:
                 df_display["time"] = pd.to_datetime(df_display["time"]).dt.tz_convert("Asia/Ho_Chi_Minh")
@@ -539,11 +559,11 @@ if menu == "📊 Thống kê hệ thống":
             # 3. Chọn đúng các cột đang có trong DB của bạn
             # Dựa theo ảnh: student_id, student_name, plate_detected, status, fee_charged
             cols_to_show = ["time", "student_id", "student_name", "plate_detected", "status", "fee_charged"]
-    
+
             # Chỉ lấy những cột thực sự tồn tại để tránh lỗi crash
             existing_cols = [c for c in cols_to_show if c in df_display.columns]
             df_final = df_display[existing_cols]
-    
+
             # 4. Đổi tên tiêu đề cột cho chuyên nghiệp (Viết tiếng Việt có dấu)
             rename_map = {
                 "time": "THỜI GIAN",
@@ -554,8 +574,8 @@ if menu == "📊 Thống kê hệ thống":
                 "fee_charged": "PHÍ (VNĐ)"
             }
             df_final = df_final.rename(columns=rename_map)
-    
-    
+
+
             # 5. Định dạng màu sắc dựa trên cột TRẠNG THÁI
             def style_status(val):
                 if val == "IN":
@@ -563,15 +583,15 @@ if menu == "📊 Thống kê hệ thống":
                 elif val == "OUT":
                     return "background-color: #f8d7da; color: #721c24; font-weight: bold;"
                 return ""
-    
-    
+
+
             # 6. Hiển thị bảng lên Streamlit
             st.dataframe(
                 df_final.style.map(style_status, subset=["TRẠNG THÁI"] if "TRẠNG THÁI" in df_final.columns else []),
                 use_container_width=True,
                 hide_index=True
             )
-    
+
             # 7. Nút xuất file (Giữ nguyên MSSV và Biển số trong file CSV)
             csv = df_display.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
@@ -589,7 +609,7 @@ def notify_low_balance(student_id, current_balance, user_data):
     Hàm kiểm tra số dư và gửi email cảnh báo nếu số dư dưới ngưỡng 10,000 VNĐ.
     Được gọi khi trừ tiền phí gửi xe hoặc Admin điều chỉnh số dư.
     """
-    low_balance_threshold = 10000 
+    low_balance_threshold = 10000
     days_between_warnings = 3
     now = datetime.now(vn_tz)
 
@@ -600,15 +620,15 @@ def notify_low_balance(student_id, current_balance, user_data):
         # Kiểm tra nếu chưa bao giờ gửi hoặc đã quá 3 ngày (tránh spam)
         if not last_sent or (now - last_sent.replace(tzinfo=vn_tz)).days >= days_between_warnings:
             from utils.email_service import send_custom_email, get_low_balance_template
-            
+
             user_email = user_data.get("email")
             if user_email:
                 # Tạo nội dung email từ template
                 html_warn = get_low_balance_template(user_data['full_name'], current_balance)
-                
+
                 # Thực hiện gửi email
                 sent = send_custom_email(user_email, "[VAA Parking] Cảnh báo số dư tài khoản thấp", html_warn)
-                
+
                 if sent:
                     # Cập nhật lại mốc thời gian gửi vào MongoDB
                     db["users"].update_one(
@@ -642,9 +662,9 @@ if menu == "👥 Quản lý người dùng":
                     )
                     # 2. Lấy số dư mới và gửi mail ngay lập tức
                     updated_user = db["users"].find_one({"student_id": target_mssv})
-                    # Gọi hàm thông báo (bạn cần dán hàm notify_low_balance tôi đưa ở câu trước vào app.py)
+                    # Gọi hàm thông báo (bạn cần dán hàm notify_low_balance tôi đưa ở câu trước vào appx.py)
                     notify_low_balance(target_mssv, updated_user['balance'], updated_user)
-                    
+
                     new_balance = target_user.get("balance", 0) + amount
                     user_email = target_user.get("email")
                     print(f">>> Email tìm thấy: {user_email}")
@@ -742,23 +762,32 @@ st.set_page_config(page_title="Hệ thống AI Giữ xe VAA", layout="wide")
 
 
 @st.cache_resource
-def load_models():
-    # Sử dụng os.path.join để đường dẫn chạy được trên cả Windows/Linux/Mac
-    base_path = os.getcwd()  # Lấy thư mục hiện tại của dự án
 
+def load_models():
+
+    # Sử dụng os.path.join để đường dẫn chạy được trên cả Windows/Linux/Mac
+    base_path = os.getcwd() # Lấy thư mục hiện tại của dự án
     plate_path = os.path.join(base_path, "models", "Bienso.pt")
     sv_path = os.path.join(base_path, "models", "Thesv.pt")
-
     # Kiểm tra file có tồn tại không trước khi load
+
     if not os.path.exists(plate_path) or not os.path.exists(sv_path):
         st.error(f"Không tìm thấy file model tại: {os.path.dirname(plate_path)}")
+
         st.stop()
+
+
 
     yolo_plate = YOLO(plate_path)
     yolo_sv = YOLO(sv_path)
-    reader = easyocr.Reader(['vi', 'en'], gpu=False)
+    reader = easyocr.Reader(
+        ['vi', 'en'],
+        gpu=False,
+        model_storage_directory=os.path.join(base_path, "models")
+    )
 
     return yolo_plate, yolo_sv, reader
+
 @st.cache_resource(ttl=86400)
 def get_ice_servers():
     try:
@@ -773,14 +802,6 @@ def get_ice_servers():
         return [
             {"urls": ["stun:stun.l.google.com:19302"]},
             {"urls": ["stun:stun1.l.google.com:19302"]},
-            {"urls": ["stun:stun2.l.google.com:19302"]},
-            {"urls": ["stun:stun3.l.google.com:19302"]},
-            {"urls": ["stun:stun4.l.google.com:19302"]},
-            {"urls": ["stun:stun.ekiga.net"]},
-            {"urls": ["stun:stun.ideasip.com"]},
-            {"urls": ["stun:stun.schlund.de"]},
-            {"urls": ["stun:stun.voiparound.com"]},
-            {"urls": ["stun:stun.voipbuster.com"]},
         ]
 
 yolo_plate, yolo_sv, reader = load_models()
@@ -908,17 +929,18 @@ def advanced_enhance(image):
 
     # 1. Phóng to là quan trọng nhất (Dùng Lanczos4)
     h, w = image.shape[:2]
-    resized = cv2.resize(image, (w * 2, h * 2), interpolation=cv2.INTER_LANCZOS4)
+    resized = cv2.resize(image, (w * 3, h * 3), interpolation=cv2.INTER_CUBIC)
 
     # 2. Tạo bản Grayscale
     gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
 
     # 3. CLAHE nhẹ (Giảm clipLimit xuống 1.2 để không bị cháy ảnh)
-    clahe = cv2.createCLAHE(clipLimit=1.2, tileGridSize=(8, 8))
-    enhanced = clahe.apply(gray)
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+    )
 
     return {
-        "enhanced": enhanced,
+        "enhanced": binary,  # Thử dùng ảnh nhị phân này cho OCR
         "raw_resized": resized
     }
 
@@ -939,94 +961,66 @@ def get_student_from_db(student_id):
     return students_col.find_one(query)
 
 
-def check_gate_process(plate_detected=None, mssv_ocr=None):
+def check_gate_process(plate_detected, mssv_ocr):
     now = datetime.now(vn_tz)
     users_col = db["users"]
-    time_str = now.strftime("%H:%M:%S - %d/%m/%Y")
-    # 0. Tiền xử lý dữ liệu đầu vào
+
+    user_data = users_col.find_one({"student_id": mssv_ocr})
+    if not user_data:
+        return "ERROR", "Tài khoản không tồn tại!"
+
+    current_balance = user_data.get("balance", 0)
+    is_staff = user_data.get("user_type") == "staff"
+    fee = 0 if is_staff else 3000
+
+    # lấy log gần nhất của MSSV này
+    last_log = logs_col.find_one(
+        {"student_id": mssv_ocr},
+        sort=[("time", -1)]
+    )
+
     def clean(p):
-        return "".join(filter(str.isalnum, str(p))).upper() if p else ""
+        return "".join(filter(str.isalnum, str(p))).upper()
 
-    # 1. Tìm lượt gần nhất RIÊNG BIỆT cho MSSV và Biển số
-    query_mssv = {"student_id": mssv_ocr} if mssv_ocr else None
-    query_plate = {"plate_detected": plate_detected} if plate_detected else None
+    # ====================
+    # XE RA
+    # ====================
+    if last_log and last_log["status"] == "IN":
+        plate_at_in = last_log["plate_detected"]
 
-    last_log_mssv = logs_col.find_one(query_mssv, sort=[("time", -1)]) if query_mssv else None
-    last_log_plate = logs_col.find_one(query_plate, sort=[("time", -1)]) if query_plate else None
+        # BẮT BUỘC TRÙNG BIỂN SỐ LÚC VÀO
+        if clean(plate_detected) != clean(plate_at_in):
+            return "ERROR_PLATE", (
+                f"Biển số không khớp!\n"
+                f"Lúc vào: {plate_at_in}\n"
+                f"Lúc ra: {plate_detected}"
+            )
 
-
-    # --- KIỂM TRA TRẠNG THÁI HIỆN TẠI TRONG BÃI ---
-    is_mssv_inside = last_log_mssv and last_log_mssv["status"] == "IN"
-    is_plate_inside = last_log_plate and last_log_plate["status"] == "IN"
-    # 1. Tìm lượt VÀO (IN) gần nhất dựa trên 1 trong 2 thông tin
-
-
-    # ==========================================
-    # TRƯỜNG HỢP: XE ĐANG RA (OUT)
-    # ==========================================
-    if is_mssv_inside or is_plate_inside:
-        # Ưu tiên lấy log của thực thể đang ở trong bãi
-        active_log = last_log_mssv if is_mssv_inside else last_log_plate
-
-        final_mssv = mssv_ocr or active_log.get("student_id")
-        final_plate = plate_detected or active_log.get("plate_detected")
-
-        # Đối chiếu biển số/thẻ nếu có đủ 2 thông tin lúc ra
-        if mssv_ocr and plate_detected:
-            if clean(plate_detected) != clean(active_log.get("plate_detected")) or mssv_ocr != active_log.get(
-                    "student_id"):
-                return "ERROR_MATCH", f"Thông tin không khớp! (Lúc vào: {active_log.get('student_id')} - {active_log.get('plate_detected')})"
-
-        user_data = users_col.find_one({"student_id": final_mssv})
-        if not user_data:
-            return "ERROR", "Dữ liệu người dùng không hợp lệ!"
-
-        is_staff = (user_data.get("user_type") == "staff")
-        fee = 0 if is_staff else 3000
-        current_balance = user_data.get("balance", 0)
-
+        # kiểm tra tiền
         if not is_staff and current_balance < fee:
-            return "LOW_BALANCE", "Số dư không đủ để ra bãi!"
+            return "LOW_BALANCE", "Số dư không đủ!"
 
         if fee > 0:
-            users_col.update_one({"student_id": final_mssv}, {"$inc": {"balance": -fee}})
-            # notify_low_balance(final_mssv, current_balance - fee, user_data) # Bật nếu có hàm này
+            users_col.update_one(
+                {"student_id": mssv_ocr},
+                {"$inc": {"balance": -fee}}
+            )
 
         logs_col.insert_one({
             "time": now,
-            "student_id": final_mssv,
+            "student_id": mssv_ocr,
             "student_name": user_data["full_name"],
-            "plate_detected": final_plate,
+            "plate_detected": plate_detected,
             "status": "OUT",
             "fee_charged": fee
         })
 
-        # Gửi email RA (Chạy ngầm)
-        user_email = user_data.get("email")
-        if user_email:
-            subject = f"[VAA Parking] Thông báo xe RA - {final_plate}"
-            html_content = get_gate_activity_template(user_data["full_name"], final_plate, "OUT", time_str)
-            threading.Thread(target=send_custom_email, args=(user_email, subject, html_content)).start()
+        return "SUCCESS_OUT", "Xe ra bãi thành công"
 
-        return "SUCCESS_OUT", f"Xe RA thành công: {final_plate}"
-
-    # ==========================================
-    # TRƯỜNG HỢP: XE ĐANG VÀO (IN)
-    # ==========================================
+    # ====================
+    # XE VÀO
+    # ====================
     else:
-        # Kiểm tra nếu xe/người đã trong bãi rồi (Chống vào chồng vào)
-        if is_mssv_inside:
-            return "ALREADY_INSIDE", f"Sinh viên {mssv_ocr} đã có xe trong bãi chưa ra!"
-        if is_plate_inside:
-            return "ALREADY_INSIDE", f"Biển số {plate_detected} đang ở trong bãi!"
-
-        if not mssv_ocr or not plate_detected:
-            return "WAITING_BOTH", "Vào cổng: Cần đủ cả Thẻ và Biển số!"
-
-        user_data = users_col.find_one({"student_id": mssv_ocr})
-        if not user_data:
-            return "ERROR", f"Tài khoản {mssv_ocr} không tồn tại!"
-
         logs_col.insert_one({
             "time": now,
             "student_id": mssv_ocr,
@@ -1035,14 +1029,7 @@ def check_gate_process(plate_detected=None, mssv_ocr=None):
             "status": "IN"
         })
 
-        # Gửi email VÀO (Chạy ngầm)
-        user_email = user_data.get("email")
-        if user_email:
-            subject = f"[VAA Parking] Thông báo xe VÀO - {plate_detected}"
-            html_content = get_gate_activity_template(user_data["full_name"], plate_detected, "IN", time_str)
-            threading.Thread(target=send_custom_email, args=(user_email, subject, html_content)).start()
-
-        return "SUCCESS_IN", f"Xe VÀO thành công: {plate_detected}"
+        return "SUCCESS_IN", "Xe vào bãi thành công"
 def get_student_from_db(student_id):
     """Tìm kiếm sinh viên linh hoạt (String/Int)"""
     clean_id = str(student_id).strip().replace('"', '')
@@ -1059,10 +1046,10 @@ def save_gate_event(plate, raw_info, image_bytes):
     """Ghi log hoặc Alert vào Database"""
     now = datetime.now(vn_tz)
     os.makedirs("images", exist_ok=True)
+
     img_name = now.strftime("%Y%m%d_%H%M%S") + ".jpg"
     img_path = f"images/{img_name}"
 
-    # Lưu ảnh vật lý (Dành cho chạy Local)
     with open(img_path, "wb") as f:
         f.write(image_bytes)
 
@@ -1070,7 +1057,6 @@ def save_gate_event(plate, raw_info, image_bytes):
     student_db = get_student_from_db(mssv_ocr)
 
     if not student_db:
-        # Ghi Alert nếu không thấy MSSV
         alerts_col.insert_one({
             "time": now,
             "reason": "Student ID not registered",
@@ -1080,8 +1066,8 @@ def save_gate_event(plate, raw_info, image_bytes):
         })
         return None, False
 
-    # So khớp biển số
-    def clean_p(p): return "".join(filter(str.isalnum, str(p))).upper()
+    def clean_p(p):
+        return "".join(filter(str.isalnum, str(p))).upper()
 
     plate_db = student_db.get("plate", "")
     is_match = clean_p(plate) == clean_p(plate_db)
@@ -1113,91 +1099,58 @@ def save_gate_event(plate, raw_info, image_bytes):
 # 3. HÀM XỬ LÝ CHÍNH (DEEP SCAN)
 # ==========================================
 def process_frame(img):
+    h_orig, w_orig = img.shape[:2]
     display_img = img.copy()
-    results_data = {"plates": [], "students": []}
 
-    # --- 1. NHẬN DIỆN BIỂN SỐ ---
-    plate_results = yolo_plate.predict(img, conf=0.5, verbose=False)[0]
-    for box in plate_results.boxes:
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
-        crop = img[y1:y2, x1:x2]
-        if crop.size > 0:
-            res_plate = advanced_enhance(crop)
-            ocr_res = reader.readtext(res_plate["enhanced"], detail=0)
-            raw_plate = "".join(ocr_res).upper()
-            fixed_plate = vietnamese_plate_correction(raw_plate)
+    res_data = {
+        "mssv": None, "user_name": None, "plate": None,
+        "students": [], "plates": [],
+        "crop_sv": None, "crop_plate": None
+    }
 
-            results_data["plates"].append(fixed_plate)
-            # Vẽ khung xanh lá cho biển số
-            cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(display_img, fixed_plate, (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-
-
-    # --- 2. NHẬN DIỆN THẺ SINH VIÊN ---
-    sv_results = yolo_sv.predict(img, conf=0.5, verbose=False)[0]
+    # --- 1) QUÉT THẺ SINH VIÊN ---
+    sv_results = yolo_sv.predict(img, conf=0.5, imgsz=640, verbose=False, max_det=1)[0]
     for box in sv_results.boxes:
         x1, y1, x2, y2 = map(int, box.xyxy[0])
-        cls_name = yolo_sv.names[int(box.cls[0])]
-        if cls_name == "the":
-            crop = img[y1:y2, x1:x2]
-            if crop.size > 0:
-                res = advanced_enhance(crop)
-                ocr_list = reader.readtext(res["enhanced"], detail=0)
-                raw_info = extract_student_info(ocr_list)
-                if raw_info["Mã SV"] != "Không rõ":
-                    results_data["students"].append(raw_info)
-                    # Kiểm tra DB ngầm (Không dùng st. ở đây)
-                    student_db = get_student_from_db(raw_info["Mã SV"])
-                    results_data["mssv_status"] = "OK" if student_db else "NOT_FOUND"
-                cv2.rectangle(display_img, (x1, y1), (x2, y2), (255, 0, 0), 2)
+        pad = 10
+        x1, y1, x2, y2 = max(0, x1-pad), max(0, y1-pad), min(w_orig, x2+pad), min(h_orig, y2+pad)
+        crop = img[y1:y2, x1:x2]
+        if crop.size > 0:
+            res_data["crop_sv"] = crop
+            res = advanced_enhance(crop)
+            ocr_list = reader.readtext(res["enhanced"], detail=0, paragraph=False)
+            info = extract_student_info(ocr_list)
+            mssv_found = info.get("Mã SV")
+            if mssv_found and mssv_found != "Không rõ":
+                clean_mssv = re.sub(r"\D", "", str(mssv_found))
+                user_db = db["students"].find_one({"student_id": clean_mssv})
+                if user_db:
+                    res_data["mssv"] = clean_mssv
+                    res_data["user_name"] = user_db.get("full_name")
+                    res_data["students"] = [info]
+                    cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    break
 
+    # --- 2) QUÉT BIỂN SỐ (PHẢI NẰM NGOÀI VÒNG LẶP SV) ---
+    plate_results = yolo_plate.predict(img, conf=0.4, imgsz=640, verbose=False)[0]
+    for box in plate_results.boxes:
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        pad = 5
+        x1, y1, x2, y2 = max(0, x1-pad), max(0, y1-pad), min(w_orig, x2+pad), min(h_orig, y2+pad)
+        crop_p = img[y1:y2, x1:x2]
+        if crop_p.size > 0:
+            res_data["crop_plate"] = crop_p
+            res_p = advanced_enhance(crop_p)
+            ocr_p = reader.readtext(res_p["enhanced"], detail=0)
+            raw_plate = "".join(ocr_p).upper()
+            fixed_p = re.sub(r'[^A-Z0-9-]', '', raw_plate)
+            if len(fixed_p) >= 7:
+                res_data["plate"] = fixed_p
+                res_data["plates"] = [fixed_p]
+                cv2.rectangle(display_img, (x1, y1), (x2, y2), (255, 255, 0), 2)
+                break
 
-    # --- 3. LOGIC XỬ LÝ VÀO RA (Đã xóa return chặn ở trên) ---
-    if results_data["students"] and results_data["plates"]:
-        # Lấy dữ liệu đầu tiên tìm thấy
-        main_student = results_data["students"][0]
-        main_plate = results_data["plates"][0]
-        mssv = main_student["Mã SV"]
-        student_db = get_student_from_db(mssv)
-
-        if student_db:
-            now = datetime.now(vn_tz)
-            last_time = st.session_state.last_scan_time.get(mssv)
-            # --- HIỂN THỊ BẢNG ĐỐI CHIẾU ---
-            st.markdown("### 📊 Log đối chiếu: OCR vs Database")
-            with st.container():
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.info("📝 **Kết quả OCR (Thô)**")
-                    st.write(f"- Họ tên: `{main_student['Họ và tên']}`")
-                    st.write(f"- MSSV: `{mssv}`")
-                with c2:
-                    st.success("✅ **Database (Chuẩn)**")
-                    st.write(f"- Họ tên: **{student_db.get('full_name')}**")
-                    st.write(f"- MSSV: **{student_db.get('student_id')}**")
-
-            # Cập nhật thông tin chuẩn để ghi Log
-            final_info = main_student.copy()
-            final_info["Họ và tên"] = student_db.get("full_name")
-            final_info["Ngành"] = student_db.get("major")
-
-            # B. Chạy logic Check Vào/Ra (Chống lấy nhầm xe)
-            # Hàm này sẽ ghi vào gate_logs hoặc alerts
-            now = datetime.now(vn_tz)
-
-            last_time = st.session_state.last_scan_time.get(mssv)
-
-            if last_time and (now - last_time).total_seconds() < SCAN_COOLDOWN:
-                return display_img, results_data
-
-            # cập nhật thời gian quét
-            st.session_state.last_scan_time[mssv] = now
-
-            res_code, res_msg = check_gate_process(main_plate, mssv)
-
-
-    return display_img, results_data
+    return display_img, res_data
 
 
 # --- LỚP XỬ LÝ VIDEO DUY NHẤT ---
@@ -1216,25 +1169,38 @@ class VideoProcessor:
 
     def detect_async(self, img):
         try:
-            res_img, data = process_frame(img)
+            small = cv2.resize(img, (640, 360))
+            res_img, data = process_frame(small)
+
             self.last_frame = res_img
+            self.last_data = data
 
-            # SỬA TẠI ĐÂY: Lấy từ data["students"] thay vì data.get("mssv")
-            if data["students"]:
-                student_info = data["students"][0]  # Lấy sinh viên đầu tiên nhận diện được
-                self.cam_storage["mssv"] = student_info["Mã SV"]
+            # auto lưu kết quả
+            if data.get("mssv") and not self.cam_storage["mssv"]:
+                self.cam_storage["mssv"] = data["mssv"]
+                self.cam_storage["user_name"] = data["user_name"]
 
-                # Tìm tên sinh viên từ DB để hiện lên UI
-                student_db = get_student_from_db(student_info["Mã SV"])
-                if student_db:
-                    self.cam_storage["user_name"] = student_db.get("full_name")
+            if data.get("plate") and not self.cam_storage["plate"]:
+                self.cam_storage["plate"] = data["plate"]
 
-            # SỬA TẠI ĐÂY: Lấy từ data["plates"]
-            if data["plates"]:
-                self.cam_storage["plate"] = data["plates"][0]
+            # tự động xác nhận luôn khi đủ 2 dữ liệu
+            if self.cam_storage["mssv"] and self.cam_storage["plate"]:
+                res_code, res_msg = check_gate_process(
+                    self.cam_storage["plate"],
+                    self.cam_storage["mssv"]
+                )
 
-        except Exception as e:
-            print(f"Lỗi Thread: {e}")
+                print("AUTO:", res_msg)
+
+                # giữ UI 3 giây cho người dùng thấy
+                time.sleep(3)
+
+                self.cam_storage = {
+                    "mssv": None,
+                    "plate": None,
+                    "user_name": None
+                }
+
         finally:
             self.processing = False
 
@@ -1242,20 +1208,16 @@ class VideoProcessor:
         img = frame.to_ndarray(format="bgr24")
         now = time.time()
 
-        # Kiểm tra interval để tránh nghẽn CPU
         if (now - self.last_detect_time > self.detect_interval) and not self.processing:
             self.processing = True
             self.last_detect_time = now
 
-            # Chạy nhận diện ở luồng riêng
             threading.Thread(
                 target=self.detect_async,
                 args=(img.copy(),),
                 daemon=True
             ).start()
 
-        # QUAN TRỌNG: Nếu đã có ảnh xử lý xong (có khung) thì hiện ảnh đó,
-        # nếu không thì hiện ảnh live bình thường
         output = self.last_frame if self.last_frame is not None else img
         return av.VideoFrame.from_ndarray(output, format="bgr24")
 
@@ -1263,6 +1225,9 @@ class VideoProcessor:
 # Khởi tạo một bản duy nhất để dùng chung
 if "processor" not in st.session_state:
     st.session_state.processor = VideoProcessor()
+
+
+
 
 # ==========================================
 # 5. GIAO DIỆN CHÍNH
@@ -1273,9 +1238,6 @@ user = st.session_state.user_info
 if user.get("role") != "admin":
 
     # Hiển thị số dư cho sinh viên xem thay vì form quét thẻ
-
-
-
     # Dừng app tại đây để sinh viên không thấy phần Camera/Upload bên dưới
     st.stop()
 
@@ -1287,55 +1249,76 @@ source = st.sidebar.radio("Nguồn đầu vào", ["📷 Camera", "📁 Tải ả
 
 # --- TRƯỜNG HỢP 1: TẢI ẢNH LÊN ---
 if source == "📁 Tải ảnh lên":
-    # (Giữ nguyên toàn bộ code xử lý File Uploader của bạn ở đây...)
-    file = st.file_uploader("Chọn ảnh (Có thể up lần lượt Thẻ rồi đến Biển số)", type=['jpg', 'png', 'jpeg'])
+    file = st.file_uploader("Chọn ảnh", type=['jpg', 'png', 'jpeg'])
 
     if st.sidebar.button("🗑️ Xóa lượt quét cũ"):
-        st.session_state.pair_data = {"mssv": None, "plate": None, "raw_info": None, "db_info": None}
+        st.session_state.upload_pair = {
+            "mssv": None, "plate": None, "db_info": None,
+            "img_sv": None, "img_plate": None
+        }
         st.rerun()
 
     if file:
         img = cv2.imdecode(np.frombuffer(file.read(), np.uint8), 1)
         res_img, data = process_frame(img)
+        pair = st.session_state.upload_pair
 
-        # Xử lý logic Thẻ SV
-        if data["students"]:
-            current_mssv = data["students"][0]["Mã SV"]
-            st.session_state.pair_data["mssv"] = current_mssv
-            st.session_state.pair_data["raw_info"] = data["students"][0]
-
-            student_db = get_student_from_db(current_mssv)
+        # Gán ảnh thẻ
+        if data["crop_sv"] is not None:
+            pair["img_sv"] = data["crop_sv"]
+        if data["mssv"]:
+            pair["mssv"] = data["mssv"]
+            student_db = get_student_from_db(data["mssv"])
             if student_db:
-                st.session_state.pair_data["db_info"] = student_db
-                st.success(f"✅ Tìm thấy SV: {student_db.get('full_name')}")
-            else:
-                st.error(f"❌ Thẻ SV {current_mssv} KHÔNG tồn tại trong Database!")
+                pair["db_info"] = student_db
 
-        # Xử lý logic Biển số
-        if data["plates"]:
-            st.session_state.pair_data["plate"] = data["plates"][0]
-            st.info(f"📡 Đã nhận diện biển số: {data['plates'][0]}")
+        # Gán ảnh biển số
+        if data["crop_plate"] is not None:
+            pair["img_plate"] = data["crop_plate"]
+            pair["plate"] = data["plate"]
 
-        # Hiển thị Trạng thái & Ghi Database
-        st.divider()
-        pair = st.session_state.pair_data
-        col_m1, col_m2 = st.columns(2)
-        col_m1.metric("Mã SV", pair["mssv"] if pair["mssv"] else "Chưa có")
-        col_m2.metric("Biển số", pair["plate"] if pair["plate"] else "Chưa có")
+    # --- HIỂN THỊ ---
+    st.divider()
+    pair = st.session_state.upload_pair
+    c1, c2 = st.columns(2)
 
-        if pair["mssv"] and pair["plate"] and pair["db_info"]:
+    with c1:
+        st.subheader("🪪 Ảnh Thẻ SV")
+        if pair["img_sv"] is not None:
+            st.image(cv2.cvtColor(pair["img_sv"], cv2.COLOR_BGR2RGB), use_container_width=True)
+            if pair["mssv"]: st.success(f"MSSV: {pair['mssv']}")
+        else:
+            st.info("Chưa có thẻ")
+
+    with c2:
+        st.subheader("📡 Ảnh Biển số")
+        if pair["img_plate"] is not None:
+            st.image(cv2.cvtColor(pair["img_plate"], cv2.COLOR_BGR2RGB), use_container_width=True)
+            if pair["plate"]: st.success(f"Biển số: {pair['plate']}")
+        else:
+            st.info("Chưa có biển số")
+
+    # --- GHI DATABASE (GATELOG) ---
+    if pair["mssv"] and pair["plate"] and pair.get("db_info"):
+        st.write("---")
+        if st.button("🚀 XÁC NHẬN GHI LOG & TRỪ TIỀN (3.000đ)", type="primary", use_container_width=True):
+            # Gọi hàm xử lý gate đã có sẵn trong code của bạn (trừ tiền + logs_col)
             res_code, res_msg = check_gate_process(pair["plate"], pair["mssv"])
+
             if "SUCCESS" in res_code:
                 st.success(f"🎉 {res_msg}")
                 st.balloons()
+                # Reset để chuẩn bị quét lượt mới
+                st.session_state.upload_pair = {"mssv": None, "plate": None, "db_info": None, "img_sv": None,
+                                                "img_plate": None}
+                time.sleep(2)
+                st.rerun()
             else:
-                st.error(f"🚨 CẢNH BÁO: {res_msg}")
-
-        st.image(res_img, caption="Ảnh vừa xử lý")
+                st.error(f"🚨 Lỗi: {res_msg}")
 
 # --- TRƯỜNG HỢP 2: DÙNG CAMERA (WEBRTC) ---
 else:
-    st.info("💡 Hướng dẫn: Đưa Thẻ SV hoặc Biển số vào trước Camera.")
+
     col_cam, col_info = st.columns([7, 3])
 
     with col_cam:
@@ -1344,43 +1327,15 @@ else:
             st.session_state.cam_key += 1
             st.session_state.processor = VideoProcessor()
             st.rerun()
-
-        show_cam = st.checkbox("Hiển thị luồng Camera lên màn hình", value=True)
-
-        # 2. Tạo style để ẩn camera nếu không chọn show_cam
-        if not show_cam:
-            st.markdown(
-                """
-                <style>
-                    /* Ẩn vùng hiển thị video của webrtc nhưng giữ nó tồn tại trong DOM */
-                    div[data-testid="stWebSrtcreamer"] iframe {
-                        display: none;
-                    }
-                    .stWebRtcStreamer {
-                        display: none;
-                    }
-                    /* Mẹo nhỏ: thu nhỏ kích thước về 0 để camera vẫn chạy ngầm */
-                    div[data-testid="stVerticalBlock"] > div:has(div.stWebRtcStreamer) {
-                        height: 0px;
-                        overflow: hidden;
-                    }
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
         ctx = webrtc_streamer(
             key=f"parking-ai-{st.session_state.cam_key}",
             video_frame_callback=st.session_state.processor.recv,
-            rtc_configuration={
-                "iceServers": get_ice_servers(),
-                "iceTransportPolicy": "all",  # Đảm bảo thử mọi cách kết nối (cả relay qua TURN)
-            },
+            rtc_configuration={"iceServers": get_ice_servers()},
             media_stream_constraints={
                 "video": {
-                    "width": {"ideal": 1280},
-                    "height": {"ideal": 720},
-                    "frameRate": {"ideal": 20},  # Giảm FPS xuống 20 để giảm tải băng thông và CPU
-                    "facingMode": "environment"  # Ưu tiên camera sau nếu chạy trên điện thoại
+                    "width": {"ideal": 640},
+                    "height": {"ideal": 360},
+                    "frameRate": {"ideal": 30}
                 },
                 "audio": False
             },
@@ -1392,63 +1347,28 @@ else:
             st.session_state.processor = VideoProcessor()
 
     with col_info:
-        # Fragment này sẽ tự chạy lại mỗi 0.5s để cập nhật thông tin từ Thread AI
         @st.fragment(run_every="0.5s")
         def status_ui():
-            storage = st.session_state.processor.cam_storage
+            st.subheader("📑 Trạng thái realtime")
 
-            # --- PHẦN 1: HIỂN THỊ TRẠNG THÁI QUÉT ---
-            col_status1, col_status2 = st.columns(2)
+            processor = st.session_state.processor
+            storage = processor.cam_storage
 
-            with col_status1:
+            # Hiển thị MSSV
+            if storage["mssv"]:
+                st.success(f"🪪 MSSV: {storage['mssv']}")
+                st.info(f"👤 {storage['user_name']}")
+            else:
+                st.warning("👉 Đang chờ quét thẻ sinh viên...")
+
+            # Hiển thị biển số
+            if storage["plate"]:
+                st.success(f"📡 Biển số: {storage['plate']}")
+            else:
                 if storage["mssv"]:
-                    # Hiển thị thông báo KHỚP ngay khi có MSSV
-                    st.success(f"✅ Đã khớp thẻ: {storage['mssv']}")
-                    st.caption(f"👤 SV: {storage.get('user_name', 'Đang tải...')}")
+                    st.warning("👉 Đã có MSSV, đang chờ biển số...")
                 else:
-                    st.warning("👉 Đang chờ quét thẻ...")
+                    st.warning("👉 Chưa quét được MSSV...")
 
-            with col_status2:
-                if storage["plate"]:
-                    st.success(f"📡 Biển số: {storage['plate']}")
-                else:
-                    # Gợi ý thông minh: Nếu có thẻ rồi thì nhắc quét biển
-                    if storage["mssv"]:
-                        st.info("🔍 Hãy đưa biển số vào...")
-                    else:
-                        st.warning("👉 Đang chờ biển số...")
 
-            # --- PHẦN 2: TỰ ĐỘNG XỬ LÝ & RESET ---
-            if storage["mssv"] and storage["plate"] and not storage.get("done"):
-                # Gọi hàm ghi log
-                res_code, res_msg = check_gate_process(storage["plate"], storage["mssv"])
-
-                if "SUCCESS" in res_code:
-                    storage["done"] = True
-                    storage["log_msg"] = res_msg
-                    st.balloons()
-                else:
-                    st.error(f"🚨 {res_msg}")
-
-            # Nếu đã xong, hiện thông báo thành công và tự động reset sau 3 giây
-            if storage.get("done"):
-                st.divider()
-                st.success(f"🚀 {storage.get('log_msg')}")
-                st.info("🔄 Hệ thống sẽ tự động reset sau 3 giây để tiếp nhận xe mới...")
-
-                # Nút bấm thủ công nếu không muốn đợi
-                if st.button("Tiếp nhận ngay", type="primary"):
-                    st.session_state.processor.cam_storage = {"mssv": None, "plate": None, "user_name": None}
-                    st.rerun()
-
-                # Logic tự động xóa sau 3 giây
-                if "reset_time" not in st.session_state:
-                    st.session_state.reset_time = time.time()
-
-                if time.time() - st.session_state.reset_time > 3:
-                    st.session_state.processor.cam_storage = {"mssv": None, "plate": None, "user_name": None}
-                    del st.session_state.reset_time
-                    st.rerun()
-
-        # Gọi hàm để hiển thị
         status_ui()
