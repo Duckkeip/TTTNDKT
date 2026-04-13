@@ -19,7 +19,7 @@ class StudentCardService:
         full_text = " | ".join(ocr_results).upper()
         no_accent_text = self.normalize_vietnamese(full_text)
 
-        # Khớp key với logic hiển thị st.table([student]) trong app.py
+        # Khớp key với logic hiển thị st.table([student]) trong appx.py
         info = {
             "MSSV": "Trống",
             "Họ Tên": "Trống",

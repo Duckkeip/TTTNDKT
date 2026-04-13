@@ -76,3 +76,25 @@ def get_low_balance_template(user_name, balance):
         <p style="margin-top: 20px; font-size: 0.9em; color: #666;">Đây là email nhắc nhở định kỳ khi số dư dưới ngưỡng quy định.</p>
     </div>
     """
+def get_gate_activity_template(user_name, plate, status, time_str):
+    """
+    Tạo template HTML cho thông báo xe VÀO/RA.
+    """
+    color = "#28a745" if status == "IN" else "#dc3545"
+    status_text = "VÀO CỔNG (IN)" if status == "IN" else "RA CỔNG (OUT)"
+    icon = "📥" if status == "IN" else "📤"
+
+    return f"""
+    <div style="font-family: sans-serif; border: 2px solid {color}; padding: 20px; border-radius: 10px;">
+        <h2 style="color: {color};">{icon} Thông báo biến động bãi xe</h2>
+        <p>Xin chào <b>{user_name}</b>,</p>
+        <p>Hệ thống VAA Smart Parking ghi nhận phương tiện của bạn vừa thực hiện lượt di chuyển:</p>
+        <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0;">
+            <p style="margin: 5px 0;"><b>Trạng thái:</b> <span style="color: {color}; font-weight: bold;">{status_text}</span></p>
+            <p style="margin: 5px 0;"><b>Biển số xe:</b> <b>{plate}</b></p>
+            <p style="margin: 5px 0;"><b>Thời gian:</b> {time_str}</p>
+        </div>
+        <p>Nếu bạn không thực hiện giao dịch này, vui lòng liên hệ ban quản lý bãi xe ngay lập tức.</p>
+        <p style="margin-top: 20px; font-size: 0.8em; color: #888;">© 2026 VAA Smart Parking System</p>
+    </div>
+    """

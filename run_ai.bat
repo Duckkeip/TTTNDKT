@@ -1,4 +1,7 @@
 @echo off
 cd /d D:\git\TTTNDKT
-py -m streamlit run app.py
+
+call venv\Scripts\activate
+python -m streamlit run app.py
+
 pause
