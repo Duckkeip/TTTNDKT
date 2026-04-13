@@ -1367,12 +1367,16 @@ else:
         ctx = webrtc_streamer(
             key=f"parking-ai-{st.session_state.cam_key}",
             video_frame_callback=st.session_state.processor.recv,
-            rtc_configuration={"iceServers": get_ice_servers()},
+            rtc_configuration={
+                "iceServers": get_ice_servers(),
+                "iceTransportPolicy": "all",  # Đảm bảo thử mọi cách kết nối (cả relay qua TURN)
+            },
             media_stream_constraints={
                 "video": {
-                    "width": {"ideal": 640},
-                    "height": {"ideal": 360},
-                    "frameRate": {"ideal": 30}
+                    "width": {"ideal": 1280},
+                    "height": {"ideal": 720},
+                    "frameRate": {"ideal": 20},  # Giảm FPS xuống 20 để giảm tải băng thông và CPU
+                    "facingMode": "environment"  # Ưu tiên camera sau nếu chạy trên điện thoại
                 },
                 "audio": False
             },
