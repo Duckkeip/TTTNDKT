@@ -1332,6 +1332,30 @@ else:
             st.session_state.cam_key += 1
             st.session_state.processor = VideoProcessor()
             st.rerun()
+
+        show_cam = st.checkbox("Hiển thị luồng Camera lên màn hình", value=True)
+
+        # 2. Tạo style để ẩn camera nếu không chọn show_cam
+        if not show_cam:
+            st.markdown(
+                """
+                <style>
+                    /* Ẩn vùng hiển thị video của webrtc nhưng giữ nó tồn tại trong DOM */
+                    div[data-testid="stWebSrtcreamer"] iframe {
+                        display: none;
+                    }
+                    .stWebRtcStreamer {
+                        display: none;
+                    }
+                    /* Mẹo nhỏ: thu nhỏ kích thước về 0 để camera vẫn chạy ngầm */
+                    div[data-testid="stVerticalBlock"] > div:has(div.stWebRtcStreamer) {
+                        height: 0px;
+                        overflow: hidden;
+                    }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
         ctx = webrtc_streamer(
             key=f"parking-ai-{st.session_state.cam_key}",
             video_frame_callback=st.session_state.processor.recv,
