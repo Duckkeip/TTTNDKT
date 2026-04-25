@@ -568,11 +568,18 @@ if menu == "📊 Thống kê hệ thống":
     
     
             # 6. Hiển thị bảng lên Streamlit
-            st.dataframe(
-                df_final.style.map(style_status, subset=["TRẠNG THÁI"] if "TRẠNG THÁI" in df_final.columns else []),
-                use_container_width=True,
-                hide_index=True
-            )
+            if not df_final.empty:
+                # Xác định cột cần tô màu
+                target_col = ["TRẠNG THÁI"] if "TRẠNG THÁI" in df_final.columns else []
+                
+                try:
+                    # Cách mới (Pandas >= 2.1.0)
+                    st.dataframe(df_final.style.map(style_status, subset=target_col), use_container_width=True)
+                except AttributeError:
+                    # Cách cũ (Nếu server dùng Pandas bản thấp hơn)
+                    st.dataframe(df_final.style.applymap(style_status, subset=target_col), use_container_width=True)
+            else:
+                st.dataframe(df_final, use_container_width=True)
     
             # 7. Nút xuất file (Giữ nguyên MSSV và Biển số trong file CSV)
             csv = df_display.to_csv(index=False).encode('utf-8-sig')
