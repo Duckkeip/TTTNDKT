@@ -4,6 +4,9 @@ import pandas as pd
 import streamlit as st
 
 import av
+
+import os
+os.system("pip uninstall opencv-python -y")
 import cv2
 import numpy as np
 import re
