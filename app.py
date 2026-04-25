@@ -669,35 +669,69 @@ if menu == "👥 Quản lý người dùng":
                     st.error("❌ không tìm thấy sinh viên này!")
 
     with col_list:
-        st.subheader("Danh sách người dùng")
-        # 1. Lấy dữ liệu từ MongoDB
-        all_users = list(db["users"].find({}, {"password": 0}))
+    st.subheader("Danh sách người dùng")
+    
+    # 1. Lấy dữ liệu từ MongoDB
+    all_users = list(db["users"].find({}, {"password": 0}))
 
-        if all_users:
-            df_users = pd.DataFrame(all_users)
+    if all_users:
+        df_users = pd.DataFrame(all_users)
 
-            # 2. ĐỊNH NGHĨA BẢN ĐỒ ĐỔI TÊN (Key cũ: Key mới)
-            # Hãy đảm bảo các Key bên trái khớp chính xác với field trong MongoDB của bạn
-            name_map = {
-                "student_id": "MSSV",
-                "full_name": "Họ và tên",
-                "user_type": "Loại",
-                "balance": "Số tiền"
-            }
+        # --- PHẦN CHỈNH SỬA PHÂN TRANG TẠI ĐÂY ---
+        items_per_page = 10  # Mỗi trang hiện 10 người
+        
+        # Khởi tạo session_state cho trang của danh sách người dùng (khác với trang của lịch sử)
+        if 'user_page' not in st.session_state:
+            st.session_state.user_page = 1
 
-            # 3. KIỂM TRA VÀ BỔ SUNG CỘT THIẾU (Tránh lỗi nếu DB trống)
-            for old_key in name_map.keys():
-                if old_key not in df_users.columns:
-                    df_users[old_key] = 0 if old_key == "balance" else "N/A"
+        total_pages = (len(df_users) // items_per_page) + (1 if len(df_users) % items_per_page > 0 else 0)
+        
+        # Tính toán vị trí bắt đầu và kết thúc
+        start_idx = (st.session_state.user_page - 1) * items_per_page
+        end_idx = start_idx + items_per_page
+        
+        # Cắt dataframe theo trang hiện tại
+        df_page = df_users.iloc[start_idx:end_idx].copy()
+        # ------------------------------------------
 
-            # 4. THỰC HIỆN ĐỔI TÊN
-            df_display = df_users.rename(columns=name_map)
+        # 2. Định nghĩa bản đồ đổi tên
+        name_map = {
+            "student_id": "MSSV",
+            "full_name": "Họ và tên",
+            "user_type": "Loại",
+            "balance": "Số tiền"
+        }
 
-            # 5. CHỌN CÁC CỘT ĐÃ ĐỔI TÊN ĐỂ HIỂN THỊ
-            cols_to_show = ["MSSV", "Họ và tên", "Loại", "Số tiền"]
-            st.dataframe(df_display[cols_to_show], use_container_width=True)
-        else:
-            st.info("Chưa có người dùng nào.")
+        # 3. Kiểm tra và bổ sung cột thiếu
+        for old_key in name_map.keys():
+            if old_key not in df_page.columns:
+                df_page[old_key] = 0 if old_key == "balance" else "N/A"
+
+        # 4. Thực hiện đổi tên và hiển thị
+        df_display = df_page.rename(columns=name_map)
+        cols_to_show = ["MSSV", "Họ và tên", "Loại", "Số tiền"]
+        
+        # Hiển thị bảng
+        st.dataframe(df_display[cols_to_show], use_container_width=True)
+
+        # 5. ĐIỀU KHIỂN PHÂN TRANG (Pagination UI)
+        col_p1, col_p2, col_p3 = st.columns([1, 2, 1])
+        
+        with col_p1:
+            if st.button("⬅️ Trước", disabled=(st.session_state.user_page <= 1), key="prev_user"):
+                st.session_state.user_page -= 1
+                st.rerun()
+        
+        with col_p2:
+            st.write(f"Trang {st.session_state.user_page} / {total_pages}")
+            
+        with col_p3:
+            if st.button("Sau ➡️", disabled=(st.session_state.user_page >= total_pages), key="next_user"):
+                st.session_state.user_page += 1
+                st.rerun()
+                
+    else:
+        st.info("Chưa có người dùng nào.")
 
 
 def send_to_api(frame, plate, student_info):
