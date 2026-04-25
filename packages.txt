@@ -1,4 +1,4 @@
 libgl1-mesa-glx
-libglib2.0-dev
+
 tesseract-ocr
 tesseract-ocr-vie
