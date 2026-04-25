@@ -5,7 +5,7 @@ import streamlit as st
 
 import av
 
-
+import plotly.express as px
 import cv2
 import numpy as np
 import re
@@ -515,13 +515,43 @@ if menu == "📊 Thống kê hệ thống":
     
         # --- PHẦN 3: BIỂU ĐỒ (VISUALIZATION) ---
         if not df.empty:
-            st.subheader("📈 Biểu đồ lưu lượng")
+            st.subheader("📈 Phân tích lưu lượng")
+            
+            # Chuẩn hóa thời gian
             df["time"] = pd.to_datetime(df["time"]).dt.tz_localize("UTC").dt.tz_convert("Asia/Ho_Chi_Minh")
-    
-            # Biểu đồ đường theo giờ/ngày
             df['hour'] = df['time'].dt.hour
-            hourly_counts = df.groupby(['hour', 'status']).size().unstack(fill_value=0)
-            st.area_chart(hourly_counts)
+            
+            # Tạo các tab để người dùng chọn loại biểu đồ muốn xem
+            tab1, tab2, tab3, tab4 = st.tabs(["📊 Cột", "📈 Đường/Miền", "🥧 Tròn", "🕒 Theo giờ"])
+        
+            with tab1:
+                # Biểu đồ Cột: Thống kê số lượng xe theo Trạng thái
+                status_counts = df['status'].value_counts().reset_index()
+                status_counts.columns = ['Trạng thái', 'Số lượng']
+                fig_col = px.bar(status_counts, x='Trạng thái', y='Số lượng', 
+                                 color='Trạng thái', title="Tổng hợp xe vào/ra")
+                st.plotly_chart(fig_col, use_container_width=True)
+        
+            with tab2:
+                # Biểu đồ Miền (Area Chart): Lưu lượng theo giờ
+                hourly_data = df.groupby(['hour', 'status']).size().reset_index(name='count')
+                fig_area = px.area(hourly_data, x='hour', y='count', color='status',
+                                   title="Lưu lượng xe theo khung giờ (Biểu đồ miền)",
+                                   labels={'hour': 'Giờ trong ngày', 'count': 'Số lượng xe'})
+                st.plotly_chart(fig_area, use_container_width=True)
+        
+            with tab3:
+                # Biểu đồ Tròn: Tỷ lệ phần trăm
+                fig_pie = px.pie(status_counts, values='Số lượng', names='Trạng thái', 
+                                 title="Tỷ lệ phân bổ trạng thái xe",
+                                 hole=0.4) # Tạo hình donut cho hiện đại
+                st.plotly_chart(fig_pie, use_container_width=True)
+        
+            with tab4:
+                # Biểu đồ Đường (Line Chart): Xu hướng
+                fig_line = px.line(hourly_data, x='hour', y='count', color='status', 
+                                   markers=True, title="Xu hướng xe theo giờ")
+                st.plotly_chart(fig_line, use_container_width=True)
     
         # --- PHẦN 4: BẢNG DỮ LIỆU ---
         st.subheader("📝 Nhật ký chi tiết")
