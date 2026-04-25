@@ -2,8 +2,8 @@ streamlit
 streamlit-autorefresh
 streamlit-webrtc
 
-numpy==1.26.4
-opencv-python-headless==4.8.1.78
+numpy==1.24.4
+opencv-python-headless==4.7.0.72
 
 
 av
@@ -19,5 +19,5 @@ payos
 
 setuptools<70
 pytz
-pandas==2.2.2
+pandas==1.5.3
 
