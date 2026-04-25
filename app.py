@@ -522,7 +522,7 @@ if menu == "📊 Thống kê hệ thống":
             df['hour'] = df['time'].dt.hour
             
             # Tạo các tab để người dùng chọn loại biểu đồ muốn xem
-            tab1, tab2, tab3, tab4 = st.tabs(["📊 Cột", "📈 Đường/Miền", "🥧 Tròn", "🕒 Theo giờ"])
+            tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Cột", "📈 Miền", "🥧 Tròn", "🕒 Theo giờ", "📦 3D View"])
         
             with tab1:
                 # Biểu đồ Cột: Thống kê số lượng xe theo Trạng thái
@@ -530,7 +530,7 @@ if menu == "📊 Thống kê hệ thống":
                 status_counts.columns = ['Trạng thái', 'Số lượng']
                 fig_col = px.bar(status_counts, x='Trạng thái', y='Số lượng', 
                                  color='Trạng thái', title="Tổng hợp xe vào/ra")
-                st.plotly_chart(fig_col, use_container_width=True)
+                st.plotly_chart(fig_col, use_container_width=True, config={'scrollZoom': True})
         
             with tab2:
                 # Biểu đồ Miền (Area Chart): Lưu lượng theo giờ
@@ -538,21 +538,49 @@ if menu == "📊 Thống kê hệ thống":
                 fig_area = px.area(hourly_data, x='hour', y='count', color='status',
                                    title="Lưu lượng xe theo khung giờ (Biểu đồ miền)",
                                    labels={'hour': 'Giờ trong ngày', 'count': 'Số lượng xe'})
-                st.plotly_chart(fig_area, use_container_width=True)
+                st.plotly_chart(fig_area, use_container_width=True, config={'scrollZoom': True})
         
             with tab3:
                 # Biểu đồ Tròn: Tỷ lệ phần trăm
                 fig_pie = px.pie(status_counts, values='Số lượng', names='Trạng thái', 
                                  title="Tỷ lệ phân bổ trạng thái xe",
                                  hole=0.4) # Tạo hình donut cho hiện đại
-                st.plotly_chart(fig_pie, use_container_width=True)
+                st.plotly_chart(fig_pie, use_container_width=True, config={'scrollZoom': True})
         
             with tab4:
                 # Biểu đồ Đường (Line Chart): Xu hướng
                 fig_line = px.line(hourly_data, x='hour', y='count', color='status', 
                                    markers=True, title="Xu hướng xe theo giờ")
-                st.plotly_chart(fig_line, use_container_width=True)
-    
+                st.plotly_chart(fig_line, use_container_width=True, config={'scrollZoom': True})
+            with tab5:
+                st.write("💡 *Dùng chuột trái để xoay, chuột phải để di chuyển, lăn chuột để Zoom*")
+                
+                # Chuẩn bị dữ liệu 3D: Giờ - Thứ trong tuần - Số lượng xe
+                df['day_of_week'] = df['time'].dt.day_name()
+                three_d_data = df.groupby(['hour', 'day_of_week']).size().reset_index(name='count')
+        
+                # Vẽ biểu đồ 3D Scatter hoặc 3D Bar
+                fig_3d = px.scatter_3d(
+                    three_d_data, 
+                    x='hour', 
+                    y='day_of_week', 
+                    z='count',
+                    color='count',
+                    size='count',
+                    labels={'hour': 'Giờ', 'day_of_week': 'Thứ', 'count': 'Số lượng'},
+                    title="Tương quan Lưu lượng: Giờ vs Thứ vs Số lượng"
+                )
+                
+                # Cấu hình để Zoom mượt hơn
+                fig_3d.update_layout(
+                    margin=dict(l=0, r=0, b=0, t=40),
+                    scene=dict(
+                        xaxis_title='Giờ trong ngày',
+                        yaxis_title='Thứ trong tuần',
+                        zaxis_title='Số lượng xe'
+                    )
+                )
+                st.plotly_chart(fig_3d, use_container_width=True, config={'scrollZoom': True})
         # --- PHẦN 4: BẢNG DỮ LIỆU ---
         st.subheader("📝 Nhật ký chi tiết")
     
