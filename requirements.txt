@@ -17,5 +17,5 @@ payos
 
 setuptools<70
 pytz
-pandas
+pandas==2.1.4
 
