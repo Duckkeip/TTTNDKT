@@ -21,3 +21,4 @@ setuptools<70
 pytz
 pandas==1.5.3
 
+plotly
