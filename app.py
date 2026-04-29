@@ -915,6 +915,57 @@ def vietnamese_plate_correction(text):
             chars[i] = map_to_num.get(chars[i], chars[i])
     return "".join(chars)
 
+# ==========================================
+# VALIDATE & CHUẨN HÓA BIỂN SỐ VIỆT NAM
+# ==========================================
+PLATE_PATTERNS = [
+    # Xe máy / ô tô biển 2 dòng: 51F1-234.56 hoặc 51AB-234.56
+    r'^\d{2}[A-Z]\d-\d{3}\.\d{2}$',
+    r'^\d{2}[A-Z]{2}-\d{3}\.\d{2}$',
+    # Xe máy 1 dòng không có dấu ngăn: 51F12345
+    r'^\d{2}[A-Z]\d{5}$',
+    r'^\d{2}[A-Z]{2}\d{5}$',
+    # Biển ngắn (5 số sau tiền tố): 51F-12345
+    r'^\d{2}[A-Z]-\d{5}$',
+]
+
+def normalize_plate(raw: str):
+    """
+    Chuẩn hóa biển số sau khi qua vietnamese_plate_correction().
+    - Tự động chèn '-' và '.' nếu thiếu (51F12345 → 51F-123.45)
+    - Trả về biển số chuẩn nếu hợp lệ, trả về None nếu không hợp lệ
+    """
+    if not raw:
+        return None
+
+    # Bước 1: Loại bỏ ký tự không hợp lệ, chuyển hoa
+    cleaned = re.sub(r'[^A-Z0-9]', '', raw.upper())
+
+    # Bước 2: Chạy qua heuristic correction đã có
+    corrected = vietnamese_plate_correction(cleaned)
+
+    # Bước 3: Thử tái cấu trúc format nếu chưa có dấu '-' và '.'
+    # Ví dụ: 51F12345 (8 ký tự) → tiền tố 51F + số 12345
+    if '-' not in corrected:
+        # Pattern: 2 số + 1-2 chữ + tùy chọn 1 số + phần số còn lại
+        m = re.match(r'^(\d{2}[A-Z]{1,2}\d?)(\d{4,5})$', corrected)
+        if m:
+            prefix, nums = m.group(1), m.group(2)
+            if len(nums) == 5:
+                # 5 số: nhóm 3.2 — ví dụ 12345 → 123.45
+                corrected = f"{prefix}-{nums[:3]}.{nums[3:]}"
+            elif len(nums) == 4:
+                # 4 số: nhóm 2.2 — ví dụ 1234 → 12.34
+                corrected = f"{prefix}-{nums[:2]}.{nums[2:]}"
+
+    # Bước 4: Kiểm tra có khớp format chuẩn không
+    is_valid = any(re.match(p, corrected) for p in PLATE_PATTERNS)
+
+    if is_valid:
+        return corrected
+    else:
+        print(f"[OCR] Biển số không hợp lệ, bỏ qua: '{raw}' → '{corrected}'")
+        return None
 
 def extract_student_info(ocr_list):
     # --- PHẦN LOG DỮ LIỆU THÔ ---
@@ -1226,13 +1277,19 @@ def process_frame(img):
             res_plate = advanced_enhance(crop)
             ocr_res = reader.readtext(res_plate["enhanced"], detail=0)
             raw_plate = "".join(ocr_res).upper()
-            fixed_plate = vietnamese_plate_correction(raw_plate)
+            valid_plate = normalize_plate(raw_plate)
 
-            results_data["plates"].append(fixed_plate)
-            # Vẽ khung xanh lá cho biển số
-            cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(display_img, fixed_plate, (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            if valid_plate:
+                results_data["plates"].append(valid_plate)
+                # Khung XANH LÁ = biển số hợp lệ
+                cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(display_img, valid_plate, (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            else:
+                # Khung ĐỎ = OCR đọc được nhưng format không hợp lệ
+                cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                cv2.putText(display_img, f"? {raw_plate}", (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
 
     # --- 2. NHẬN DIỆN THẺ SINH VIÊN ---
