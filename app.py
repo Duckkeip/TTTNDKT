@@ -22,12 +22,14 @@ from services.auth_service import auth_ui
 from twilio.rest import Client
 from utils.email_service import send_custom_email, get_transaction_template, get_gate_activity_template
 import os
+
 load_dotenv()
-#PAYOS
+# PAYOS
 from payos import PayOS
 from payos.types import CreatePaymentLinkRequest
 import pytz
 from datetime import datetime, timedelta
+
 # Import theo đường dẫn tuyệt đối này để lách lỗi 'cannot import name'
 
 payos = PayOS(
@@ -74,12 +76,14 @@ def init_db():
     try:
         client = MongoClient(uri)
         db = client["TN"]
-        return db["students"], db["gate_logs"], db["alerts"] ,db["recharge_logs"],db["users"]
+        return db["students"], db["gate_logs"], db["alerts"], db["recharge_logs"], db["users"]
     except Exception as e:
         st.error(f"❌ Lỗi kết nối MongoDB: {e}")
         st.stop()
+
+
 students_col, logs_col, alerts_col, recharge_col, users_col = init_db()
-db = students_col.database # Bây giờ biến 'db' mới chính thức tồn tại
+db = students_col.database  # Bây giờ biến 'db' mới chính thức tồn tại
 print(">>> ĐÃ KẾT NỐI DB THÀNH CÔNG, ĐANG QUÉT TOKEN...")
 # --- BƯỚC 2: XỬ LÝ KÍCH HOẠT VỚI LOG CHI TIẾT ---
 query_params = st.query_params
@@ -134,7 +138,6 @@ if "verify_token" in query_params:
         # Log thêm để bạn kiểm tra xem mình có lưu nhầm bảng khác không
         st.write("💡 Mẹo: Hãy kiểm tra MongoDB Compass xem Token này nằm ở bảng 'users' hay 'students'.")
 
-
 # Khởi tạo các biến session cần thiết
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
@@ -154,8 +157,8 @@ if "payment" in params and "sid" in params:
         st.session_state.logged_in = True
         st.session_state.user_info = user_data
 if not st.session_state.logged_in or st.session_state.user_info is None:
-    auth_ui(db) # Truyền db vào để thực hiện query login
-    st.stop() # Dừng tại đây, không chạy các dòng code bên dưới
+    auth_ui(db)  # Truyền db vào để thực hiện query login
+    st.stop()  # Dừng tại đây, không chạy các dòng code bên dưới
 
 user = st.session_state.user_info
 
@@ -188,162 +191,161 @@ with st.expander("📜 Lịch sử giao dịch", expanded=True):
 
     all_orders = list(db["recharge_logs"].find(query).sort("time", -1))
     if all_orders:
-            # Tạo danh sách để hiển thị bảng
-            display_data = []
-            # Bảng ánh xạ trạng thái sang tiếng Việt
-            status_map = {
-                "PAID": "✅ ĐÃ TRẢ",
-                "PENDING": "⏳ ĐANG CHỜ",
-                "CANCELLED": "❌ HỦY",
-                "EXPIRED": "⚠️ HẾT HẠN"
-            }
+        # Tạo danh sách để hiển thị bảng
+        display_data = []
+        # Bảng ánh xạ trạng thái sang tiếng Việt
+        status_map = {
+            "PAID": "✅ ĐÃ TRẢ",
+            "PENDING": "⏳ ĐANG CHỜ",
+            "CANCELLED": "❌ HỦY",
+            "EXPIRED": "⚠️ HẾT HẠN"
+        }
 
-            for order in all_orders:
-                raw_time = order["time"]
-                now = datetime.now()
-                current_status = order["status"]
-                # Không thực hiện astimezone nữa để tránh bị cộng thêm 7 tiếng
-                vn_time_display = raw_time.strftime("%d/%m/%Y %H:%M:%S")
-                # Nếu đơn đang PENDING, phải hỏi PayOS xem khách đã HỦY chưa
-                if current_status == "PENDING" and now - raw_time < timedelta(minutes=15):
-                    try:
-                        # Dùng đúng hàm get_payment_link_info hoặc getPaymentLinkInformation
-                        payos_info = payos.payment_requests.get(order["orderCode"])
-                        st.write("PAYOS STATUS:", payos_info.status)
-                        if payos_info.status in ["CANCELLED", "EXPIRED"]:
-                            # Cập nhật ngay vào DB để lần sau không cần hỏi lại PayOS nữa
-                            current_status = payos_info.status
+        for order in all_orders:
+            raw_time = order["time"]
+            now = datetime.now()
+            current_status = order["status"]
+            # Không thực hiện astimezone nữa để tránh bị cộng thêm 7 tiếng
+            vn_time_display = raw_time.strftime("%d/%m/%Y %H:%M:%S")
+            # Nếu đơn đang PENDING, phải hỏi PayOS xem khách đã HỦY chưa
+            if current_status == "PENDING" and now - raw_time < timedelta(minutes=15):
+                try:
+                    # Dùng đúng hàm get_payment_link_info hoặc getPaymentLinkInformation
+                    payos_info = payos.payment_requests.get(order["orderCode"])
+                    st.write("PAYOS STATUS:", payos_info.status)
+                    if payos_info.status in ["CANCELLED", "EXPIRED"]:
+                        # Cập nhật ngay vào DB để lần sau không cần hỏi lại PayOS nữa
+                        current_status = payos_info.status
+
+                        db["recharge_logs"].update_one(
+                            {"orderCode": order["orderCode"]},
+                            {"$set": {"status": current_status}}
+                        )
+
+                    elif payos_info.status == "PAID":
+                        # Thực hiện cộng tiền vào MongoDB bảng 'users'
+                        users_collection = students_col.database["users"]
+                        result = users_collection.update_one(
+                            {"student_id": user['student_id']},
+                            {"$inc": {"balance": int(order["amount"])}}
+                        )
+
+                        if result.modified_count > 0:
+                            # 2. Lấy dữ liệu mới nhất (bao gồm số dư mới và email) để gửi thông báo
+                            updated_user = users_collection.find_one({"student_id": user['student_id']})
+                            new_balance = updated_user.get("balance", 0)
+                            user_email = updated_user.get("email")
+
+                            # 3. Gửi Email thông báo qua PayOS
+                            if user_email:
+                                html_body = get_transaction_template(
+                                    user_name=updated_user.get("full_name", "Sinh viên"),
+                                    amount=int(order["amount"]),
+                                    balance=new_balance
+                                )
+                                send_custom_email(
+                                    receiver_email=user_email,
+                                    subject="[VAA Parking] Xác nhận nạp tiền thành công (PayOS)",
+                                    html_content=html_body
+                                )
 
                             db["recharge_logs"].update_one(
                                 {"orderCode": order["orderCode"]},
-                                {"$set": {"status": current_status}}
+                                {"$set": {"status": "PAID"}}
                             )
+                            current_status = "PAID"
+                            st.session_state.user_info["balance"] += int(order["amount"])
+                            st.toast(f"💰 Đã cộng {order['amount']:,} VNĐ!", icon="✅")
+                            st.rerun()
+                except:
+                    pass  # Nếu lỗi API PayOS thì bỏ qua để hiện PENDING tiếp
+            display_data.append({
+                "Mã đơn hàng": str(order["orderCode"]),
+                "Ngày giao dịch": vn_time_display,
+                "Số tiền": f"{order['amount']:,} VNĐ",
+                "Tình trạng": status_map.get(current_status, current_status)
+            })
 
-                        elif payos_info.status == "PAID":
-                            # Thực hiện cộng tiền vào MongoDB bảng 'users'
-                            users_collection = students_col.database["users"]
-                            result = users_collection.update_one(
-                                {"student_id": user['student_id']},
-                                {"$inc": {"balance": int(order["amount"])}}
-                            )
+        df = pd.DataFrame(display_data)
 
-                            if result.modified_count > 0:
-                                # 2. Lấy dữ liệu mới nhất (bao gồm số dư mới và email) để gửi thông báo
-                                updated_user = users_collection.find_one({"student_id": user['student_id']})
-                                new_balance = updated_user.get("balance", 0)
-                                user_email = updated_user.get("email")
+        rows_per_page = 5
+        total_rows = len(df)
+        total_pages = (total_rows // rows_per_page) + (1 if total_rows % rows_per_page > 0 else 0)
+
+        # Hiển thị bảng
+        start_idx = (st.session_state.current_page - 1) * rows_per_page
+        st.dataframe(
+            df.iloc[start_idx: start_idx + rows_per_page],
+            use_container_width=True,
+            hide_index=True,
+            column_config={"Mã đơn hàng": st.column_config.TextColumn("Mã đơn hàng")}  # Căn trái
+        )
+
+        # --- LOGIC PHÂN TRANG RÚT GỌN (1 ... 10 11 12 ... 100) ---
+        if total_pages > 1:
+            st.write("---")
 
 
-                                # 3. Gửi Email thông báo qua PayOS
-                                if user_email:
-                                    html_body = get_transaction_template(
-                                        user_name=updated_user.get("full_name", "Sinh viên"),
-                                        amount=int(order["amount"]),
-                                        balance=new_balance
-                                    )
-                                    send_custom_email(
-                                        receiver_email=user_email,
-                                        subject="[VAA Parking] Xác nhận nạp tiền thành công (PayOS)",
-                                        html_content=html_body
-                                    )
+            # Hàm xác định các số trang cần hiển thị
+            def get_page_range(current, total):
+                if total <= 7:
+                    return list(range(1, total + 1))
 
-                                db["recharge_logs"].update_one(
-                                    {"orderCode": order["orderCode"]},
-                                    {"$set": {"status": "PAID"}}
-                                )
-                                current_status = "PAID"
-                                st.session_state.user_info["balance"] += int(order["amount"])
-                                st.toast(f"💰 Đã cộng {order['amount']:,} VNĐ!", icon="✅")
+                pages = [1]
+                if current > 3:
+                    pages.append("...")
+
+                # Hiển thị các trang xung quanh trang hiện tại
+                for i in range(max(2, current - 1), min(total, current + 2)):
+                    pages.append(i)
+
+                if current < total - 2:
+                    pages.append("...")
+
+                pages.append(total)
+                return pages
+
+
+            page_range = get_page_range(st.session_state.current_page, total_pages)
+
+            # Tạo các cột để căn giữa (Cột trống - Cụm nút - Cột trống)
+            # Tỉ lệ [2, 6, 2] giúp cụm nút ở giữa rộng và cân đối
+            empty_l, center_col, empty_r = st.columns([1, 8, 1])
+
+            with center_col:
+                # Tạo số lượng cột tương ứng với các nút cần hiện (Prev + Page Range + Next)
+                n_cols = len(page_range) + 2
+                btn_cols = st.columns(n_cols)
+
+                # 1. Nút Trước (Prev)
+                with btn_cols[0]:
+                    if st.button("⬅️", disabled=(st.session_state.current_page == 1), use_container_width=True):
+                        st.session_state.current_page -= 1
+                        st.rerun()
+
+                # 2. Các nút số trang và dấu "..."
+                for idx, pg in enumerate(page_range):
+                    with btn_cols[idx + 1]:
+                        if pg == "...":
+                            st.write("<p style='text-align:center; padding-top:5px;'>...</p>",
+                                     unsafe_allow_html=True)
+                        else:
+                            # Đổi màu nút nếu là trang hiện tại
+                            btn_type = "primary" if pg == st.session_state.current_page else "secondary"
+                            if st.button(str(pg), type=btn_type, use_container_width=True):
+                                st.session_state.current_page = pg
                                 st.rerun()
-                    except:
-                        pass  # Nếu lỗi API PayOS thì bỏ qua để hiện PENDING tiếp
-                display_data.append({
-                    "Mã đơn hàng": str(order["orderCode"]),
-                    "Ngày giao dịch": vn_time_display,
-                    "Số tiền": f"{order['amount']:,} VNĐ",
-                    "Tình trạng": status_map.get(current_status, current_status)
-                })
 
-            df = pd.DataFrame(display_data)
+                # 3. Nút Sau (Next)
+                with btn_cols[-1]:
+                    if st.button("➡️", disabled=(st.session_state.current_page == total_pages),
+                                 use_container_width=True):
+                        st.session_state.current_page += 1
+                        st.rerun()
 
-            rows_per_page = 5
-            total_rows = len(df)
-            total_pages = (total_rows // rows_per_page) + (1 if total_rows % rows_per_page > 0 else 0)
-
-            # Hiển thị bảng
-            start_idx = (st.session_state.current_page - 1) * rows_per_page
-            st.dataframe(
-                df.iloc[start_idx: start_idx + rows_per_page],
-                use_container_width=True,
-                hide_index=True,
-                column_config={"Mã đơn hàng": st.column_config.TextColumn("Mã đơn hàng")}  # Căn trái
-            )
-
-            # --- LOGIC PHÂN TRANG RÚT GỌN (1 ... 10 11 12 ... 100) ---
-            if total_pages > 1:
-                st.write("---")
-
-
-                # Hàm xác định các số trang cần hiển thị
-                def get_page_range(current, total):
-                    if total <= 7:
-                        return list(range(1, total + 1))
-
-                    pages = [1]
-                    if current > 3:
-                        pages.append("...")
-
-                    # Hiển thị các trang xung quanh trang hiện tại
-                    for i in range(max(2, current - 1), min(total, current + 2)):
-                        pages.append(i)
-
-                    if current < total - 2:
-                        pages.append("...")
-
-                    pages.append(total)
-                    return pages
-
-
-                page_range = get_page_range(st.session_state.current_page, total_pages)
-
-                # Tạo các cột để căn giữa (Cột trống - Cụm nút - Cột trống)
-                # Tỉ lệ [2, 6, 2] giúp cụm nút ở giữa rộng và cân đối
-                empty_l, center_col, empty_r = st.columns([1, 8, 1])
-
-                with center_col:
-                    # Tạo số lượng cột tương ứng với các nút cần hiện (Prev + Page Range + Next)
-                    n_cols = len(page_range) + 2
-                    btn_cols = st.columns(n_cols)
-
-                    # 1. Nút Trước (Prev)
-                    with btn_cols[0]:
-                        if st.button("⬅️", disabled=(st.session_state.current_page == 1), use_container_width=True):
-                            st.session_state.current_page -= 1
-                            st.rerun()
-
-                    # 2. Các nút số trang và dấu "..."
-                    for idx, pg in enumerate(page_range):
-                        with btn_cols[idx + 1]:
-                            if pg == "...":
-                                st.write("<p style='text-align:center; padding-top:5px;'>...</p>",
-                                         unsafe_allow_html=True)
-                            else:
-                                # Đổi màu nút nếu là trang hiện tại
-                                btn_type = "primary" if pg == st.session_state.current_page else "secondary"
-                                if st.button(str(pg), type=btn_type, use_container_width=True):
-                                    st.session_state.current_page = pg
-                                    st.rerun()
-
-                    # 3. Nút Sau (Next)
-                    with btn_cols[-1]:
-                        if st.button("➡️", disabled=(st.session_state.current_page == total_pages),
-                                     use_container_width=True):
-                            st.session_state.current_page += 1
-                            st.rerun()
-
-                st.markdown(
-                    f"<p style='text-align: center; color: gray;'>Đang xem trang {st.session_state.current_page} / {total_pages}</p>",
-                    unsafe_allow_html=True)
+            st.markdown(
+                f"<p style='text-align: center; color: gray;'>Đang xem trang {st.session_state.current_page} / {total_pages}</p>",
+                unsafe_allow_html=True)
     else:
         st.info("Chưa có lịch sử nạp tiền trong khoảng thời gian này.")
 
@@ -351,6 +353,8 @@ with st.expander("📜 Lịch sử giao dịch", expanded=True):
 st.set_page_config(page_title="Hệ thống AI Giữ xe VAA", layout="wide")
 
 st.sidebar.markdown(f"### 👤 {user['full_name']}")
+
+
 # Chỉ sinh viên mới hiện số dư ví
 
 def get_user_balance():
@@ -358,41 +362,41 @@ def get_user_balance():
     st.session_state.user_info = user
 
     return user["balance"]
+
+
 balance = get_user_balance()
 st.sidebar.markdown(f"💳 **Số dư:** `{balance:,}` VNĐ")
-
 
 # Hiển thị loại tài khoản
 u_type = "Cán bộ/Giảng viên" if user.get("user_type") == "staff" else "Sinh viên"
 st.sidebar.info(f"🏷️ Loại: {u_type}")
 
-
 # --- PHÂN QUYỀN GIAO DIỆN ---
 if user.get("role") == "admin":
-    menu = st.sidebar.radio("Chức năng Admin", [ "📊 Thống kê hệ thống", "👥 Quản lý người dùng"])
+    menu = st.sidebar.radio("Chức năng Admin", ["📊 Thống kê hệ thống", "👥 Quản lý người dùng"])
 else:
     menu = "📜 Lịch sử cá nhân"
     # Nút đăng xuất
 if st.sidebar.button("🚪 Đăng xuất"):
-        # Xóa trạng thái đăng nhập
-        st.session_state.logged_in = False
-        st.session_state.user_info = None
-        # Xóa các dữ liệu tạm thời khác nếu có
-        if 'pair_data' in st.session_state:
-            del st.session_state.pair_data
+    # Xóa trạng thái đăng nhập
+    st.session_state.logged_in = False
+    st.session_state.user_info = None
+    # Xóa các dữ liệu tạm thời khác nếu có
+    if 'pair_data' in st.session_state:
+        del st.session_state.pair_data
 
-        st.success("Đã đăng xuất thành công!")
-        st.rerun()  # Tải lại trang để quay về màn hình đăng nhập
+    st.success("Đã đăng xuất thành công!")
+    st.rerun()  # Tải lại trang để quay về màn hình đăng nhập
 
 # Nếu là User bình thường, dừng các logic quét ở dưới và chỉ hiện lịch sử
 if menu == "📜 Lịch sử cá nhân":
     st.title("📜 Lịch sử cá nhân")
-    
+
     # Tab hiển thị: 1 bên là Lịch sử ra vào, 1 bên là Nạp tiền
     tab1, tab2 = st.tabs(["🚗 Lịch sử ra vào", "💳 Nạp tiền vào ví"])
 
     with tab1:
-        
+
         my_logs = list(logs_col.find({"student_id": user["student_id"]}).sort("time", -1))
         if my_logs:
             st.dataframe(pd.DataFrame(my_logs).drop(columns=["_id"]), use_container_width=True)
@@ -402,7 +406,7 @@ if menu == "📜 Lịch sử cá nhân":
     with tab2:
         if "checkout_url" not in st.session_state:
             st.session_state.checkout_url = None
-        
+
         st.subheader("Nạp tiền tự động qua QR (Ngân hàng)")
 
         with st.form("payment_form"):
@@ -412,8 +416,6 @@ if menu == "📜 Lịch sử cá nhân":
                 try:
                     order_code = int(datetime.now().timestamp() * 1000)
                     final_amount = int(amount)
-                    
-                    
 
                     payment_data = CreatePaymentLinkRequest(
                         orderCode=order_code,
@@ -437,7 +439,7 @@ if menu == "📜 Lịch sử cá nhân":
                         "status": "PENDING",
                         "time": datetime.now(vn_tz)
                     })
-                    
+
                     st.session_state.checkout_url = pay_link.checkout_url
                     st.success("✅ Đã tạo mã thanh toán!")
                 except Exception as e:
@@ -445,15 +447,17 @@ if menu == "📜 Lịch sử cá nhân":
         if st.session_state.checkout_url:
             st.markdown(f"**Vui lòng quét mã QR bên dưới để hoàn tất:**")
             st.components.v1.iframe(st.session_state.checkout_url, height=700, scrolling=True)
-        
-        # Thêm nút để ẩn mã QR nếu khách hàng muốn hủy
+
+            # Thêm nút để ẩn mã QR nếu khách hàng muốn hủy
             if st.button("Hủy/Đóng mã QR này"):
                 st.session_state.checkout_url = None
                 st.rerun()
-            
+
 # --- NỘI DUNG CHO ADMIN: THỐNG KÊ ---
 if menu == "📊 Thống kê hệ thống":
     st.title("📊 Báo cáo & Thống kê Chuyên sâu")
+
+
     @st.fragment(run_every="30s")
     def show_dashboard():
         # --- PHẦN 1: BỘ LỌC (FILTERS) ---
@@ -465,7 +469,7 @@ if menu == "📊 Thống kê hệ thống":
                 search_plate = st.text_input("Biển số xe", placeholder="Nhập biển số...")
             with col_f3:
                 filter_status = st.selectbox("Trạng thái", ["Tất cả", "IN", "OUT"])
-    
+
         # Xây dựng query cho MongoDB dựa trên bộ lọc
         query = {}
         if search_mssv:
@@ -476,16 +480,16 @@ if menu == "📊 Thống kê hệ thống":
             query["plate_detected"] = {"$regex": search_plate, "$options": "i"}
         if filter_status != "Tất cả":
             query["status"] = filter_status
-    
+
         # Lấy dữ liệu đã lọc
         filtered_logs = list(logs_col.find(query).sort("time", -1))
         df = pd.DataFrame(filtered_logs)
-    
+
         # --- PHẦN 2: METRICS (THỐNG KÊ NHANH) ---
         col1, col2, col3, col4 = st.columns(4)
-    
+
         total_logs = len(df) if not df.empty else 0
-    
+
         pipeline = [
             {"$sort": {"time": -1}},
             {
@@ -496,42 +500,42 @@ if menu == "📊 Thống kê hệ thống":
             },
             {"$match": {"last_status": "IN"}}
         ]
-        
+
         # Thêm try-except để tránh lỗi vặt làm treo giao diện
         try:
             vehicles_inside = len(list(logs_col.aggregate(pipeline)))
         except:
             vehicles_inside = 0
-    
+
         # Tính doanh thu: Lưu ý dùng đúng tên trường 'fee_charged' hoặc 'fee' tùy DB của bạn
         # Nếu trong DB lưu là 'fee_charged' thì sửa df['fee'] thành df['fee_charged']
         fee_col = 'fee' if 'fee' in df.columns else ('fee_charged' if 'fee_charged' in df.columns else None)
         total_revenue = df[fee_col].sum() if fee_col and not df.empty else 0
-    
+
         col1.metric("Tổng lượt (Lọc)", f"{total_logs}")
         col2.metric("Xe trong bãi", f"{vehicles_inside}")
         col3.metric("Doanh thu (Lọc)", f"{total_revenue:,.0f}đ")
         col4.metric("Cảnh báo", f"{alerts_col.count_documents({})}")
-    
+
         # --- PHẦN 3: BIỂU ĐỒ (VISUALIZATION) ---
         if not df.empty:
             st.subheader("📈 Phân tích lưu lượng")
-            
+
             # Chuẩn hóa thời gian
             df["time"] = pd.to_datetime(df["time"]).dt.tz_localize("UTC").dt.tz_convert("Asia/Ho_Chi_Minh")
             df['hour'] = df['time'].dt.hour
-            
+
             # Tạo các tab để người dùng chọn loại biểu đồ muốn xem
             tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Cột", "📈 Miền", "🥧 Tròn", "🕒 Theo giờ", "📦 3D View"])
-        
+
             with tab1:
                 # Biểu đồ Cột: Thống kê số lượng xe theo Trạng thái
                 status_counts = df['status'].value_counts().reset_index()
                 status_counts.columns = ['Trạng thái', 'Số lượng']
-                fig_col = px.bar(status_counts, x='Trạng thái', y='Số lượng', 
+                fig_col = px.bar(status_counts, x='Trạng thái', y='Số lượng',
                                  color='Trạng thái', title="Tổng hợp xe vào/ra")
                 st.plotly_chart(fig_col, use_container_width=True, config={'scrollZoom': True})
-        
+
             with tab2:
                 # Biểu đồ Miền (Area Chart): Lưu lượng theo giờ
                 hourly_data = df.groupby(['hour', 'status']).size().reset_index(name='count')
@@ -539,38 +543,38 @@ if menu == "📊 Thống kê hệ thống":
                                    title="Lưu lượng xe theo khung giờ (Biểu đồ miền)",
                                    labels={'hour': 'Giờ trong ngày', 'count': 'Số lượng xe'})
                 st.plotly_chart(fig_area, use_container_width=True, config={'scrollZoom': True})
-        
+
             with tab3:
                 # Biểu đồ Tròn: Tỷ lệ phần trăm
-                fig_pie = px.pie(status_counts, values='Số lượng', names='Trạng thái', 
+                fig_pie = px.pie(status_counts, values='Số lượng', names='Trạng thái',
                                  title="Tỷ lệ phân bổ trạng thái xe",
-                                 hole=0.4) # Tạo hình donut cho hiện đại
+                                 hole=0.4)  # Tạo hình donut cho hiện đại
                 st.plotly_chart(fig_pie, use_container_width=True, config={'scrollZoom': True})
-        
+
             with tab4:
                 # Biểu đồ Đường (Line Chart): Xu hướng
-                fig_line = px.line(hourly_data, x='hour', y='count', color='status', 
+                fig_line = px.line(hourly_data, x='hour', y='count', color='status',
                                    markers=True, title="Xu hướng xe theo giờ")
                 st.plotly_chart(fig_line, use_container_width=True, config={'scrollZoom': True})
             with tab5:
                 st.write("💡 *Dùng chuột trái để xoay, chuột phải để di chuyển, lăn chuột để Zoom*")
-                
+
                 # Chuẩn bị dữ liệu 3D: Giờ - Thứ trong tuần - Số lượng xe
                 df['day_of_week'] = df['time'].dt.day_name()
                 three_d_data = df.groupby(['hour', 'day_of_week']).size().reset_index(name='count')
-        
+
                 # Vẽ biểu đồ 3D Scatter hoặc 3D Bar
                 fig_3d = px.scatter_3d(
-                    three_d_data, 
-                    x='hour', 
-                    y='day_of_week', 
+                    three_d_data,
+                    x='hour',
+                    y='day_of_week',
                     z='count',
                     color='count',
                     size='count',
                     labels={'hour': 'Giờ', 'day_of_week': 'Thứ', 'count': 'Số lượng'},
                     title="Tương quan Lưu lượng: Giờ vs Thứ vs Số lượng"
                 )
-                
+
                 # Cấu hình để Zoom mượt hơn
                 fig_3d.update_layout(
                     margin=dict(l=0, r=0, b=0, t=40),
@@ -583,11 +587,11 @@ if menu == "📊 Thống kê hệ thống":
                 st.plotly_chart(fig_3d, use_container_width=True, config={'scrollZoom': True})
         # --- PHẦN 4: BẢNG DỮ LIỆU ---
         st.subheader("📝 Nhật ký chi tiết")
-    
+
         if not df.empty:
             # 1. Tạo bản sao để xử lý hiển thị
             df_display = df.copy()
-    
+
             # 2. Xử lý thời gian (Chuyển từ UTC sang Giờ Việt Nam)
             if "time" in df_display.columns:
                 df_display["time"] = pd.to_datetime(df_display["time"]).dt.tz_convert("Asia/Ho_Chi_Minh")
@@ -599,11 +603,11 @@ if menu == "📊 Thống kê hệ thống":
             # 3. Chọn đúng các cột đang có trong DB của bạn
             # Dựa theo ảnh: student_id, student_name, plate_detected, status, fee_charged
             cols_to_show = ["time", "student_id", "student_name", "plate_detected", "status", "fee_charged"]
-    
+
             # Chỉ lấy những cột thực sự tồn tại để tránh lỗi crash
             existing_cols = [c for c in cols_to_show if c in df_display.columns]
             df_final = df_display[existing_cols]
-    
+
             # 4. Đổi tên tiêu đề cột cho chuyên nghiệp (Viết tiếng Việt có dấu)
             rename_map = {
                 "time": "THỜI GIAN",
@@ -614,8 +618,7 @@ if menu == "📊 Thống kê hệ thống":
                 "fee_charged": "PHÍ (VNĐ)"
             }
             df_final = df_final.rename(columns=rename_map)
-    
-    
+
             # 5. Định dạng màu sắc dựa trên cột TRẠNG THÁI
             def style_status(val):
                 if val == "IN":
@@ -623,13 +626,12 @@ if menu == "📊 Thống kê hệ thống":
                 elif val == "OUT":
                     return "background-color: #f8d7da; color: #721c24; font-weight: bold;"
                 return ""
-    
-    
+
             # 6. Hiển thị bảng lên Streamlit
             if not df_final.empty:
                 # Xác định cột cần tô màu
                 target_col = ["TRẠNG THÁI"] if "TRẠNG THÁI" in df_final.columns else []
-                
+
                 try:
                     # Cách mới (Pandas >= 2.1.0)
                     st.dataframe(df_final.style.map(style_status, subset=target_col), use_container_width=True)
@@ -638,7 +640,7 @@ if menu == "📊 Thống kê hệ thống":
                     st.dataframe(df_final.style.applymap(style_status, subset=target_col), use_container_width=True)
             else:
                 st.dataframe(df_final, use_container_width=True)
-    
+
             # 7. Nút xuất file (Giữ nguyên MSSV và Biển số trong file CSV)
             csv = df_display.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
@@ -649,14 +651,18 @@ if menu == "📊 Thống kê hệ thống":
             )
         else:
             st.info("Không tìm thấy dữ liệu phù hợp với bộ lọc (MSSV hoặc Biển số).")
+
+
     show_dashboard()
-#ADMIN: Quản lý Users
+
+
+# ADMIN: Quản lý Users
 def notify_low_balance(student_id, current_balance, user_data):
     """
     Hàm kiểm tra số dư và gửi email cảnh báo nếu số dư dưới ngưỡng 10,000 VNĐ.
     Được gọi khi trừ tiền phí gửi xe hoặc Admin điều chỉnh số dư.
     """
-    low_balance_threshold = 10000 
+    low_balance_threshold = 10000
     days_between_warnings = 3
     now = datetime.now(vn_tz)
 
@@ -667,15 +673,15 @@ def notify_low_balance(student_id, current_balance, user_data):
         # Kiểm tra nếu chưa bao giờ gửi hoặc đã quá 3 ngày (tránh spam)
         if not last_sent or (now - last_sent.replace(tzinfo=vn_tz)).days >= days_between_warnings:
             from utils.email_service import send_custom_email, get_low_balance_template
-            
+
             user_email = user_data.get("email")
             if user_email:
                 # Tạo nội dung email từ template
                 html_warn = get_low_balance_template(user_data['full_name'], current_balance)
-                
+
                 # Thực hiện gửi email
                 sent = send_custom_email(user_email, "[VAA Parking] Cảnh báo số dư tài khoản thấp", html_warn)
-                
+
                 if sent:
                     # Cập nhật lại mốc thời gian gửi vào MongoDB
                     db["users"].update_one(
@@ -683,6 +689,8 @@ def notify_low_balance(student_id, current_balance, user_data):
                         {"$set": {"last_warning_sent": now}}
                     )
                     print(f">>> Đã gửi email cảnh báo cho {student_id}")
+
+
 if menu == "👥 Quản lý người dùng":
     st.header("💰 Quản lý Ngân khố & Người dùng")
 
@@ -711,7 +719,7 @@ if menu == "👥 Quản lý người dùng":
                     updated_user = db["users"].find_one({"student_id": target_mssv})
                     # Gọi hàm thông báo (bạn cần dán hàm notify_low_balance tôi đưa ở câu trước vào app.py)
                     notify_low_balance(target_mssv, updated_user['balance'], updated_user)
-                    
+
                     new_balance = target_user.get("balance", 0) + amount
                     user_email = target_user.get("email")
                     print(f">>> Email tìm thấy: {user_email}")
@@ -735,30 +743,30 @@ if menu == "👥 Quản lý người dùng":
 
     with col_list:
         st.subheader("Danh sách người dùng")
-        
+
         # 1. Lấy dữ liệu từ MongoDB
         all_users = list(db["users"].find({}, {"password": 0}))
-    
+
         if all_users:
             df_users = pd.DataFrame(all_users)
-    
+
             # --- PHẦN CHỈNH SỬA PHÂN TRANG TẠI ĐÂY ---
             items_per_page = 10  # Mỗi trang hiện 10 người
-            
+
             # Khởi tạo session_state cho trang của danh sách người dùng (khác với trang của lịch sử)
             if 'user_page' not in st.session_state:
                 st.session_state.user_page = 1
-    
+
             total_pages = (len(df_users) // items_per_page) + (1 if len(df_users) % items_per_page > 0 else 0)
-            
+
             # Tính toán vị trí bắt đầu và kết thúc
             start_idx = (st.session_state.user_page - 1) * items_per_page
             end_idx = start_idx + items_per_page
-            
+
             # Cắt dataframe theo trang hiện tại
             df_page = df_users.iloc[start_idx:end_idx].copy()
             # ------------------------------------------
-    
+
             # 2. Định nghĩa bản đồ đổi tên
             name_map = {
                 "student_id": "MSSV",
@@ -766,35 +774,35 @@ if menu == "👥 Quản lý người dùng":
                 "user_type": "Loại",
                 "balance": "Số tiền"
             }
-    
+
             # 3. Kiểm tra và bổ sung cột thiếu
             for old_key in name_map.keys():
                 if old_key not in df_page.columns:
                     df_page[old_key] = 0 if old_key == "balance" else "N/A"
-    
+
             # 4. Thực hiện đổi tên và hiển thị
             df_display = df_page.rename(columns=name_map)
             cols_to_show = ["MSSV", "Họ và tên", "Loại", "Số tiền"]
-            
+
             # Hiển thị bảng
             st.dataframe(df_display[cols_to_show], use_container_width=True)
-    
+
             # 5. ĐIỀU KHIỂN PHÂN TRANG (Pagination UI)
             col_p1, col_p2, col_p3 = st.columns([1, 2, 1])
-            
+
             with col_p1:
                 if st.button("⬅️ Trước", disabled=(st.session_state.user_page <= 1), key="prev_user"):
                     st.session_state.user_page -= 1
                     st.rerun()
-            
+
             with col_p2:
                 st.write(f"Trang {st.session_state.user_page} / {total_pages}")
-                
+
             with col_p3:
                 if st.button("Sau ➡️", disabled=(st.session_state.user_page >= total_pages), key="next_user"):
                     st.session_state.user_page += 1
                     st.rerun()
-                    
+
         else:
             st.info("Chưa có người dùng nào.")
 
@@ -803,7 +811,7 @@ def send_to_api(frame, plate, student_info):
     """
     Ghi trực tiếp vào MongoDB Atlas thay vì gọi qua localhost
     """
-    current_time = datetime.now(vn_tz) # Lưu dạng datetime object để dễ truy vấn sau này
+    current_time = datetime.now(vn_tz)  # Lưu dạng datetime object để dễ truy vấn sau này
 
     # 1. Xử lý ảnh (Giữ nguyên logic của bạn)
     h, w = frame.shape[:2]
@@ -836,6 +844,8 @@ def send_to_api(frame, plate, student_info):
         st.toast(f"✅ Đã lưu dữ liệu: {plate}", icon="📡")
     except Exception as e:
         st.error(f"⚠️ Lỗi lưu Database: {str(e)}")
+
+
 # ==========================================
 # 1. CẤU HÌNH & KHỞI TẠO (Dùng Cache để chạy nhanh)
 # ==========================================
@@ -849,7 +859,7 @@ def load_models():
 
     plate_path = os.path.join(base_path, "models", "Bienso.pt")
     sv_path = os.path.join(base_path, "models", "Thesv.pt")
-
+    char_path = os.path.join(base_path, "models", "Character.pt")
     # Kiểm tra file có tồn tại không trước khi load
     if not os.path.exists(plate_path) or not os.path.exists(sv_path):
         st.error(f"Không tìm thấy file model tại: {os.path.dirname(plate_path)}")
@@ -857,9 +867,12 @@ def load_models():
 
     yolo_plate = YOLO(plate_path)
     yolo_sv = YOLO(sv_path)
+    yolo_char = YOLO(char_path)
     reader = easyocr.Reader(['vi', 'en'], gpu=False)
 
-    return yolo_plate, yolo_sv, reader
+    return yolo_plate, yolo_sv,yolo_char,reader
+
+
 @st.cache_resource(ttl=86400)
 def get_ice_servers():
     try:
@@ -884,97 +897,24 @@ def get_ice_servers():
             {"urls": ["stun:stun.voipbuster.com"]},
         ]
 
-yolo_plate, yolo_sv, reader = load_models()
+
+yolo_plate, yolo_sv,yolo_char ,reader = load_models()
 
 
 # ==========================================
 # 2. CÁC HÀM LOGIC CŨ CỦA BẠN (ĐÃ TỐI ƯU)
 # ==========================================
 
-def normalize_text(text):
-    text = unicodedata.normalize('NFD', text)
-    text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
-    text = text.upper()
-    text = re.sub(r"[^A-Z0-9/ ]", " ", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
 
-
-def vietnamese_plate_correction(text):
-    text = re.sub(r'[^0-9A-Z]', '', text.upper())
-    if len(text) < 7: return text
-    chars = list(text)
-    map_to_char = {'1': 'I', '7': 'T', '0': 'O', '5': 'S', '2': 'Z'}
-    map_to_num = {'I': '1', 'T': '7', 'S': '5', 'G': '6', 'B': '8', 'D': '0', 'O': '0'}
-    if len(chars) > 2 and chars[2].isdigit():
-        chars[2] = map_to_char.get(chars[2], chars[2])
-    if len(chars) > 3 and not chars[3].isdigit():
-        chars[3] = map_to_num.get(chars[3], chars[3])
-    for i in range(len(chars) - 1, max(len(chars) - 4, 3), -1):
-        if not chars[i].isdigit():
-            chars[i] = map_to_num.get(chars[i], chars[i])
-    return "".join(chars)
-
-# ==========================================
-# VALIDATE & CHUẨN HÓA BIỂN SỐ VIỆT NAM
-# ==========================================
-PLATE_PATTERNS = [
-    # Xe máy / ô tô biển 2 dòng: 51F1-234.56 hoặc 51AB-234.56
-    r'^\d{2}[A-Z]\d-\d{3}\.\d{2}$',
-    r'^\d{2}[A-Z]{2}-\d{3}\.\d{2}$',
-    # Xe máy 1 dòng không có dấu ngăn: 51F12345
-    r'^\d{2}[A-Z]\d{5}$',
-    r'^\d{2}[A-Z]{2}\d{5}$',
-    # Biển ngắn (5 số sau tiền tố): 51F-12345
-    r'^\d{2}[A-Z]-\d{5}$',
-]
-
-def normalize_plate(raw: str):
-    """
-    Chuẩn hóa biển số sau khi qua vietnamese_plate_correction().
-    - Tự động chèn '-' và '.' nếu thiếu (51F12345 → 51F-123.45)
-    - Trả về biển số chuẩn nếu hợp lệ, trả về None nếu không hợp lệ
-    """
-    if not raw:
-        return None
-
-    # Bước 1: Loại bỏ ký tự không hợp lệ, chuyển hoa
-    cleaned = re.sub(r'[^A-Z0-9]', '', raw.upper())
-
-    # Bước 2: Chạy qua heuristic correction đã có
-    corrected = vietnamese_plate_correction(cleaned)
-
-    # Bước 3: Thử tái cấu trúc format nếu chưa có dấu '-' và '.'
-    # Ví dụ: 51F12345 (8 ký tự) → tiền tố 51F + số 12345
-    if '-' not in corrected:
-        # Pattern: 2 số + 1-2 chữ + tùy chọn 1 số + phần số còn lại
-        m = re.match(r'^(\d{2}[A-Z]{1,2}\d?)(\d{4,5})$', corrected)
-        if m:
-            prefix, nums = m.group(1), m.group(2)
-            if len(nums) == 5:
-                # 5 số: nhóm 3.2 — ví dụ 12345 → 123.45
-                corrected = f"{prefix}-{nums[:3]}.{nums[3:]}"
-            elif len(nums) == 4:
-                # 4 số: nhóm 2.2 — ví dụ 1234 → 12.34
-                corrected = f"{prefix}-{nums[:2]}.{nums[2:]}"
-
-    # Bước 4: Kiểm tra có khớp format chuẩn không
-    is_valid = any(re.match(p, corrected) for p in PLATE_PATTERNS)
-
-    if is_valid:
-        return corrected
-    else:
-        print(f"[OCR] Biển số không hợp lệ, bỏ qua: '{raw}' → '{corrected}'")
-        return None
 
 def extract_student_info(ocr_list):
     # --- PHẦN LOG DỮ LIỆU THÔ ---
     # Log này giúp bạn debug xem OCR có đọc sót dòng nào không
-    print("\n" + "="*30)
+    print("\n" + "=" * 30)
     print("DEBUG OCR RAW DATA:")
     for idx, text in enumerate(ocr_list):
         print(f"[{idx}]: {text}")
-    print("="*30 + "\n")
+    print("=" * 30 + "\n")
 
     data = {
         "Họ và tên": "Không rõ",
@@ -1054,6 +994,7 @@ def extract_student_info(ocr_list):
 
     return data
 
+
 def advanced_enhance(image):
     if image is None or image.size == 0:
         return None
@@ -1095,6 +1036,7 @@ def check_gate_process(plate_detected=None, mssv_ocr=None):
     now = datetime.now(vn_tz)
     users_col = db["users"]
     time_str = now.strftime("%H:%M:%S - %d/%m/%Y")
+
     # 0. Tiền xử lý dữ liệu đầu vào
     def clean(p):
         return "".join(filter(str.isalnum, str(p))).upper() if p else ""
@@ -1106,12 +1048,10 @@ def check_gate_process(plate_detected=None, mssv_ocr=None):
     last_log_mssv = logs_col.find_one(query_mssv, sort=[("time", -1)]) if query_mssv else None
     last_log_plate = logs_col.find_one(query_plate, sort=[("time", -1)]) if query_plate else None
 
-
     # --- KIỂM TRA TRẠNG THÁI HIỆN TẠI TRONG BÃI ---
     is_mssv_inside = last_log_mssv and last_log_mssv["status"] == "IN"
     is_plate_inside = last_log_plate and last_log_plate["status"] == "IN"
     # 1. Tìm lượt VÀO (IN) gần nhất dựa trên 1 trong 2 thông tin
-
 
     # ==========================================
     # TRƯỜNG HỢP: XE ĐANG RA (OUT)
@@ -1195,6 +1135,8 @@ def check_gate_process(plate_detected=None, mssv_ocr=None):
             threading.Thread(target=send_custom_email, args=(user_email, subject, html_content)).start()
 
         return "SUCCESS_IN", f"Xe VÀO thành công: {plate_detected}"
+
+
 def get_student_from_db(student_id):
     """Tìm kiếm sinh viên linh hoạt (String/Int)"""
     clean_id = str(student_id).strip().replace('"', '')
@@ -1233,7 +1175,8 @@ def save_gate_event(plate, raw_info, image_bytes):
         return None, False
 
     # So khớp biển số
-    def clean_p(p): return "".join(filter(str.isalnum, str(p))).upper()
+    def clean_p(p):
+        return "".join(filter(str.isalnum, str(p))).upper()
 
     plate_db = student_db.get("plate", "")
     is_match = clean_p(plate) == clean_p(plate_db)
@@ -1261,36 +1204,90 @@ def save_gate_event(plate, raw_info, image_bytes):
 
     return student_db, is_match
 
+
 # ==========================================
 # 3. HÀM XỬ LÝ CHÍNH (DEEP SCAN)
 # ==========================================
 def process_frame(img):
     display_img = img.copy()
-    results_data = {"plates": [], "students": []}
+    h_orig, w_orig = img.shape[:2]
+    results_data = {
+        "plates": [],
+        "easyocr_plates": [],
+        "students": [],
+        "mssv_status": None,
+        "plate_crops": []
+    }
 
-    # --- 1. NHẬN DIỆN BIỂN SỐ ---
+    # 1. Phát hiện biển số
     plate_results = yolo_plate.predict(img, conf=0.5, verbose=False)[0]
+
     for box in plate_results.boxes:
         x1, y1, x2, y2 = map(int, box.xyxy[0])
-        crop = img[y1:y2, x1:x2]
-        if crop.size > 0:
-            res_plate = advanced_enhance(crop)
-            ocr_res = reader.readtext(res_plate["enhanced"], detail=0)
-            raw_plate = "".join(ocr_res).upper()
-            valid_plate = normalize_plate(raw_plate)
 
-            if valid_plate:
-                results_data["plates"].append(valid_plate)
-                # Khung XANH LÁ = biển số hợp lệ
-                cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(display_img, valid_plate, (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-            else:
-                # Khung ĐỎ = OCR đọc được nhưng format không hợp lệ
-                cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                cv2.putText(display_img, f"? {raw_plate}", (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        # 👉 PADDING CHUẨN: Không quá sát, không quá rộng
+        pw, ph = int((x2 - x1) * 0.1), int((y2 - y1) * 0.2)
+        x1_n, y1_n = max(0, x1 - pw), max(0, y1 - ph)
+        x2_n, y2_n = min(w_orig, x2 + pw), min(h_orig, y2 + ph)
+        plate_crop = img[y1_n:y2_n, x1_n:x2_n]
 
+        if plate_crop.size > 0:
+            # 2. Nhận diện ký tự (YOLO)
+            char_res = yolo_char.predict(plate_crop, conf=0.4, verbose=False)[0]
+            chars = []
+
+            # Lấy thông tin box để lọc trùng
+            temp_chars = []
+            for c_box in char_res.boxes:
+                cx1, cy1, cx2, cy2 = map(int, c_box.xyxy[0])
+                label = yolo_char.names[int(c_box.cls[0])]
+                conf = float(c_box.conf[0])
+                temp_chars.append([cx1, cy1, cx2, cy2, label, conf])
+
+            # 👉 LỌC BOX TRÙNG (Xử lý lỗi thừa chữ T)
+            # Nếu 2 box đè lên nhau > 70%, chỉ giữ lại box có conf cao hơn
+            keep_chars = []
+            temp_chars.sort(key=lambda x: x[5], reverse=True)  # Ưu tiên độ tự tin cao
+            for c in temp_chars:
+                overlap = False
+                for k in keep_chars:
+                    # Kiểm tra xem tâm của box này có nằm quá gần box kia không
+                    if abs(c[0] - k[0]) < 10 and abs(c[1] - k[1]) < 10:
+                        overlap = True
+                        break
+                if not overlap:
+                    keep_chars.append(c)
+
+            # 3. GHÉP CHUỖI 2 DÒNG (Logic ax.py)
+            plate_text_yolo = ""
+            if keep_chars:
+                keep_chars.sort(key=lambda x: x[1])  # Sắp dọc
+                y_coords = [c[1] for c in keep_chars]
+                mid_y = np.mean(y_coords)
+
+                # Chia dòng 1 và dòng 2 cho biển xe máy
+                line1 = sorted([c for c in keep_chars if c[1] < mid_y], key=lambda x: x[0])
+                line2 = sorted([c for c in keep_chars if c[1] >= mid_y], key=lambda x: x[0])
+
+                plate_text_yolo = "".join([c[4] for c in line1 + line2])
+
+            # 4. EASYOCR ĐỌC THÊM ĐỂ ĐỐI CHIẾU
+            ocr_res = reader.readtext(plate_crop)
+            plate_text_easy = "".join([res[1] for res in ocr_res]).replace(" ", "").upper()
+            # Lọc bỏ ký tự lạ cho EasyOCR
+            plate_text_easy = re.sub(r'[^A-Z0-9]', '', plate_text_easy)
+
+            # Lưu kết quả
+            results_data["plates"].append(plate_text_yolo)
+            results_data["easyocr_plates"].append(plate_text_easy)
+            results_data["plate_crops"].append(plate_crop)
+
+            # Vẽ lên ảnh hiển thị
+            cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(display_img, f"YOLO: {plate_text_yolo}", (x1, y1 - 35),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(display_img, f"OCR: {plate_text_easy}", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
     # --- 2. NHẬN DIỆN THẺ SINH VIÊN ---
     sv_results = yolo_sv.predict(img, conf=0.5, verbose=False)[0]
@@ -1309,7 +1306,6 @@ def process_frame(img):
                     student_db = get_student_from_db(raw_info["Mã SV"])
                     results_data["mssv_status"] = "OK" if student_db else "NOT_FOUND"
                 cv2.rectangle(display_img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-
 
     # --- 3. LOGIC XỬ LÝ VÀO RA (Đã xóa return chặn ở trên) ---
     if results_data["students"] and results_data["plates"]:
@@ -1353,7 +1349,6 @@ def process_frame(img):
             st.session_state.last_scan_time[mssv] = now
 
             res_code, res_msg = check_gate_process(main_plate, mssv)
-
 
     return display_img, results_data
 
@@ -1429,17 +1424,13 @@ user = st.session_state.user_info
 
 # Kiểm tra nếu role KHÔNG PHẢI admin (Dựa trên ảnh MongoDB của bạn)
 if user.get("role") != "admin":
-
     # Hiển thị số dư cho sinh viên xem thay vì form quét thẻ
-
-
 
     # Dừng app tại đây để sinh viên không thấy phần Camera/Upload bên dưới
     st.stop()
 
 # --- NẾU LÀ ADMIN, TIẾP TỤC HIỂN THỊ GIAO DIỆN CHÍNH ---
 st.title("VAA Hệ thống giữ xe thẻ sinh viên")
-
 
 source = st.sidebar.radio("Nguồn đầu vào", ["📷 Camera", "📁 Tải ảnh lên"])
 
@@ -1455,7 +1446,22 @@ if source == "📁 Tải ảnh lên":
     if file:
         img = cv2.imdecode(np.frombuffer(file.read(), np.uint8), 1)
         res_img, data = process_frame(img)
+        # Hiển thị kết quả chi tiết
+        col_res1, col_res2 = st.columns([2, 1])
 
+        with col_res1:
+            st.image(cv2.cvtColor(res_img, cv2.COLOR_BGR2RGB), caption="Ảnh gốc nhận diện")
+
+        with col_res2:
+            st.subheader("Kết quả Character.pt")
+            if data["plates"]:
+                for i, p_text in enumerate(data["plates"]):
+                    st.write(f"**Biển số #{i + 1}:**")
+                    # Hiển thị ảnh biển số đã crop
+                    st.image(cv2.cvtColor(data["plate_crops"][i], cv2.COLOR_BGR2RGB))
+                    st.success(f"Ký tự: {p_text}")
+            else:
+                st.warning("Không tìm thấy biển số")
         # Xử lý logic Thẻ SV
         if data["students"]:
             current_mssv = data["students"][0]["Mã SV"]
@@ -1607,6 +1613,7 @@ else:
                     st.session_state.processor.cam_storage = {"mssv": None, "plate": None, "user_name": None}
                     del st.session_state.reset_time
                     st.rerun()
+
 
         # Gọi hàm để hiển thị
         status_ui()
