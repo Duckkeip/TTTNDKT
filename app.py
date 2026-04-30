@@ -1212,82 +1212,145 @@ def process_frame(img):
     display_img = img.copy()
     h_orig, w_orig = img.shape[:2]
     results_data = {
-        "plates": [],
-        "easyocr_plates": [],
+        "plates_text_yolo": [],
+        "plates_text_easy": [],
+        "plate_crops_raw": [],  # Tên mới (ảnh sạch)
+        "plate_crops_drawn": [],  # Tên mới (ảnh có vẽ bbox)
+        "plate_crops": [],  # Thêm lại tên cũ để app.py không bị lỗi
+        "characters_list": [],
         "students": [],
-        "mssv_status": None,
-        "plate_crops": []
+        "plates": []
     }
 
     # 1. Phát hiện biển số
+    # conf=0.5: Chỉ lấy biển số có độ tự tin cao
     plate_results = yolo_plate.predict(img, conf=0.5, verbose=False)[0]
 
     for box in plate_results.boxes:
         x1, y1, x2, y2 = map(int, box.xyxy[0])
 
-        # 👉 PADDING CHUẨN: Không quá sát, không quá rộng
-        pw, ph = int((x2 - x1) * 0.1), int((y2 - y1) * 0.2)
+        # 1. TĂNG PADDING: Lấy rộng ra một chút nữa để model dễ nhận diện (10%)
+        pw, ph = int((x2 - x1) * 0.21), int((y2 - y1) * 0.1)
         x1_n, y1_n = max(0, x1 - pw), max(0, y1 - ph)
         x2_n, y2_n = min(w_orig, x2 + pw), min(h_orig, y2 + ph)
         plate_crop = img[y1_n:y2_n, x1_n:x2_n]
 
         if plate_crop.size > 0:
-            # 2. Nhận diện ký tự (YOLO)
-            char_res = yolo_char.predict(plate_crop, conf=0.4, verbose=False)[0]
-            chars = []
+            # 👉 [MỚI] PHÓNG TO ẢNH CROP ĐỂ MODEL DỄ ĐỌC KÝ TỰ HƠN
+            # Nếu ảnh crop quá bé (VD: rộng < 200px), hãy phóng to nó lên
+            if plate_crop.shape[1] < 300:
+                scale = 2  # Phóng to gấp đôi
+                plate_crop_for_detect = cv2.resize(plate_crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            else:
+                plate_crop_for_detect = plate_crop
 
-            # Lấy thông tin box để lọc trùng
-            temp_chars = []
+            # 2. NHẬN DIỆN KÝ TỰ - Hạ conf xuống 0.35 để nhạy hơn
+            char_res = yolo_char.predict(plate_crop_for_detect, conf=0.32, verbose=False, iou=0.2, agnostic_nms=True)[0]
+
+            crop_drawn = plate_crop_for_detect.copy()
+            all_chars_data = []
             for c_box in char_res.boxes:
                 cx1, cy1, cx2, cy2 = map(int, c_box.xyxy[0])
                 label = yolo_char.names[int(c_box.cls[0])]
                 conf = float(c_box.conf[0])
-                temp_chars.append([cx1, cy1, cx2, cy2, label, conf])
 
-            # 👉 LỌC BOX TRÙNG (Xử lý lỗi thừa chữ T)
-            # Nếu 2 box đè lên nhau > 70%, chỉ giữ lại box có conf cao hơn
-            keep_chars = []
-            temp_chars.sort(key=lambda x: x[5], reverse=True)  # Ưu tiên độ tự tin cao
-            for c in temp_chars:
-                overlap = False
-                for k in keep_chars:
-                    # Kiểm tra xem tâm của box này có nằm quá gần box kia không
-                    if abs(c[0] - k[0]) < 10 and abs(c[1] - k[1]) < 10:
-                        overlap = True
-                        break
-                if not overlap:
-                    keep_chars.append(c)
+                # Tính tâm box để sắp xếp chính xác hơn
+                cent_x = (cx1 + cx2) // 2
+                cent_y = (cy1 + cy2) // 2
 
-            # 3. GHÉP CHUỖI 2 DÒNG (Logic ax.py)
-            plate_text_yolo = ""
-            if keep_chars:
-                keep_chars.sort(key=lambda x: x[1])  # Sắp dọc
-                y_coords = [c[1] for c in keep_chars]
-                mid_y = np.mean(y_coords)
+                all_chars_data.append({
+                    'bbox': (cx1, cy1, cx2, cy2),
+                    'label': label,
+                    'center': (cent_x, cent_y),
+                    'width': cx2 - cx1,
+                    'height': cy2 - cy1
+                })
 
-                # Chia dòng 1 và dòng 2 cho biển xe máy
-                line1 = sorted([c for c in keep_chars if c[1] < mid_y], key=lambda x: x[0])
-                line2 = sorted([c for c in keep_chars if c[1] >= mid_y], key=lambda x: x[0])
+            # 👉 3. THUẬT TOÁN SẮP XẾP CHỮ THÔNG MINH (CHO CẢ OTO VÀ XE MÁY)
+            final_plate_text = ""
+            sorted_chars_details = []
 
-                plate_text_yolo = "".join([c[4] for c in line1 + line2])
+            if all_chars_data:
+                # B1: Sắp xếp tất cả theo trục Y (trên xuống dưới)
+                all_chars_data.sort(key=lambda x: x['bbox'][1])
+
+                # B2: Gom nhóm thành các dòng dựa trên chiều cao trung bình
+                lines = []
+                current_line = []
+
+                # Lấy chiều cao trung bình của ký tự làm ngưỡng chia dòng
+                if all_chars_data:
+                    avg_h = np.mean([c['height'] for c in all_chars_data])
+                    line_threshold = avg_h * 0.5  # Ngưỡng Y: Nếu chênh lệch < 70% avg_h -> cùng dòng
+                else:
+                    line_threshold = 10  # Default
+
+                # Logic chia dòng
+                if all_chars_data:
+                    current_line.append(all_chars_data[0])
+                    for i in range(1, len(all_chars_data)):
+                        prev_c = all_chars_data[i - 1]
+                        curr_c = all_chars_data[i]
+
+                        # So sánh tọa độ Y (top) của ký tự hiện tại với ký tự trước
+                        # Nếu chênh lệch Y nhỏ hơn ngưỡng chia dòng -> Cùng một dòng
+                        if curr_c['bbox'][1] - prev_c['bbox'][1] < line_threshold:
+                            current_line.append(curr_c)
+                        else:
+                            # Chênh lệch lớn -> Dòng mới bắt đầu
+                            lines.append(current_line)
+                            current_line = [curr_c]
+                    lines.append(current_line)  # Thêm dòng cuối cùng
+
+                # B3: Sắp xếp từng dòng từ trái sang phải và ghép chuỗi
+                char_idx = 1  # Thứ tự đọc
+                for line in lines:
+                    # Sắp xếp dòng này theo trục X (trái qua phải)
+                    line.sort(key=lambda x: x['bbox'][0])
+
+                    for c in line:
+                        final_plate_text += c['label']
+
+                        # [MỚI] 👉 B4: VẼ BBOX VÀ THỨ TỰ LÊN ẢNH CROP ĐÃ VẼ
+                        bx1, by1, bx2, by2 = c['bbox']
+                        txt_label = f"{c['label']} ({char_idx})"
+
+                        offset = 2  # Số pixel muốn bóp vào từ mỗi cạnh
+                        bx1_v, by1_v = bx1 + offset, by1 + offset
+                        bx2_v, by2_v = bx2 - offset, by2 - offset
+
+                        # Vẽ khung với tọa độ đã thu nhỏ
+                        cv2.rectangle(crop_drawn, (bx1_v, by1_v), (bx2_v, by2_v), (0, 0, 255), 1)
+
+                        # Đẩy chữ label lên cao hơn một chút để không chạm khung
+                        cv2.putText(crop_drawn, txt_label, (bx1_v, by1_v - 7),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
+
+                        # Lưu chi tiết ký tự để dùng sau nếu cần
+                        sorted_chars_details.append((c['label'], bx1, by1))
+                        char_idx += 1
 
             # 4. EASYOCR ĐỌC THÊM ĐỂ ĐỐI CHIẾU
+            # Dùng reader.readtext trên ảnh crop TRƯỚC khi vẽ
             ocr_res = reader.readtext(plate_crop)
             plate_text_easy = "".join([res[1] for res in ocr_res]).replace(" ", "").upper()
-            # Lọc bỏ ký tự lạ cho EasyOCR
             plate_text_easy = re.sub(r'[^A-Z0-9]', '', plate_text_easy)
 
-            # Lưu kết quả
-            results_data["plates"].append(plate_text_yolo)
-            results_data["easyocr_plates"].append(plate_text_easy)
-            results_data["plate_crops"].append(plate_crop)
+            # --- LƯU KẾT QUẢ ---
+            results_data["plates"].append(final_plate_text)
+            results_data["plates_text_yolo"].append(final_plate_text)
+            results_data["plates_text_easy"].append(plate_text_easy)
+            results_data["plate_crops_raw"].append(plate_crop)  # Ảnh gốc
+            results_data["plate_crops_drawn"].append(crop_drawn)  # [MỚI] Ảnh đã vẽ bbox
+            results_data["characters_list"].append(sorted_chars_details)
+            # ... các dòng lưu cũ ...
 
-            # Vẽ lên ảnh hiển thị
+            results_data["plate_crops"].append(crop_drawn)  # Gán vào đây để app.py đọc được
+            # Vẽ lên ảnh hiển thị chính (vẫn như cũ)
             cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(display_img, f"YOLO: {plate_text_yolo}", (x1, y1 - 35),
+            cv2.putText(display_img, f"YOLO: {final_plate_text}", (x1, y1 - 35),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(display_img, f"OCR: {plate_text_easy}", (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+
 
     # --- 2. NHẬN DIỆN THẺ SINH VIÊN ---
     sv_results = yolo_sv.predict(img, conf=0.5, verbose=False)[0]
@@ -1458,7 +1521,7 @@ if source == "📁 Tải ảnh lên":
                 for i, p_text in enumerate(data["plates"]):
                     st.write(f"**Biển số #{i + 1}:**")
                     # Hiển thị ảnh biển số đã crop
-                    st.image(cv2.cvtColor(data["plate_crops"][i], cv2.COLOR_BGR2RGB))
+                    st.image(cv2.cvtColor(data["plate_crops_drawn"][i], cv2.COLOR_BGR2RGB))
                     st.success(f"Ký tự: {p_text}")
             else:
                 st.warning("Không tìm thấy biển số")
